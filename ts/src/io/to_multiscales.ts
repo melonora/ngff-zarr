@@ -27,7 +27,7 @@ export interface ToNgffImageOptions {
  */
 export async function toNgffImage(
   data: ArrayLike<number> | number[][] | number[][][],
-  options: ToNgffImageOptions = {}
+  options: ToNgffImageOptions = {},
 ): Promise<NgffImage> {
   const {
     dims = ["y", "x"],
@@ -89,7 +89,7 @@ export async function toNgffImage(
 
   if (shape.length > dims.length) {
     throw new Error(
-      `Data dimensionality (${shape.length}) exceeds dims length (${dims.length})`
+      `Data dimensionality (${shape.length}) exceeds dims length (${dims.length})`,
     );
   }
 
@@ -149,7 +149,7 @@ export interface ToMultiscalesOptions {
  */
 export function toMultiscales(
   image: NgffImage,
-  options: ToMultiscalesOptions = {}
+  options: ToMultiscalesOptions = {},
 ): Multiscales {
   const {
     scaleFactors = [2, 4],
@@ -167,7 +167,7 @@ export function toMultiscales(
       return createAxis(
         dim as "x" | "y" | "z",
         "space",
-        image.axesUnits?.[dim]
+        image.axesUnits?.[dim],
       );
     } else if (dim === "c") {
       return createAxis(dim as "c", "channel");
@@ -183,7 +183,7 @@ export function toMultiscales(
     createDataset(
       "0",
       image.dims.map((dim) => image.scale[dim]),
-      image.dims.map((dim) => image.translation[dim])
+      image.dims.map((dim) => image.translation[dim]),
     ),
   ];
 
