@@ -1,4 +1,4 @@
-[project]
+[workspace]
 name = "ngff-zarr-ts"
 version = "0.1.0"
 description = "TypeScript implementation of ngff-zarr for Deno, Node, and the browser."

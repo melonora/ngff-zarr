@@ -7211,7 +7211,7 @@ packages:
   timestamp: 1738196177597
 - pypi: ./
   name: ngff-zarr
-  version: 0.17.0
+  version: 0.18.0
   sha256: bdaf9d86bfa778dba958665828129eb415e5020239bd3366d98f91e77012c4fc
   requires_dist:
   - dask[array]
