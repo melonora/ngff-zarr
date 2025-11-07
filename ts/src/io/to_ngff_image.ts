@@ -19,7 +19,7 @@ export interface ToNgffImageOptions {
  */
 export async function toNgffImage(
   data: ArrayLike<number> | number[][] | number[][][],
-  options: ToNgffImageOptions = {}
+  options: ToNgffImageOptions = {},
 ): Promise<NgffImage> {
   const {
     dims = ["y", "x"],
@@ -98,7 +98,7 @@ export async function toNgffImage(
 
   if (shape.length !== dims.length) {
     throw new Error(
-      `Shape dimensionality (${shape.length}) must match dims length (${dims.length})`
+      `Shape dimensionality (${shape.length}) must match dims length (${dims.length})`,
     );
   }
 

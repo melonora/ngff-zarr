@@ -27,7 +27,7 @@ interface DimFactors {
 function dimScaleFactors(
   dims: string[],
   scaleFactor: Record<string, number> | number,
-  previousDimFactors: DimFactors
+  previousDimFactors: DimFactors,
 ): DimFactors {
   const dimFactors: DimFactors = {};
 
@@ -58,7 +58,7 @@ function dimScaleFactors(
 function updatePreviousDimFactors(
   scaleFactor: Record<string, number> | number,
   spatialDims: string[],
-  previousDimFactors: DimFactors
+  previousDimFactors: DimFactors,
 ): DimFactors {
   const updated: DimFactors = { ...previousDimFactors };
 
@@ -83,7 +83,7 @@ function updatePreviousDimFactors(
 function nextScaleMetadata(
   image: NgffImage,
   dimFactors: DimFactors,
-  spatialDims: string[]
+  spatialDims: string[],
 ): [Record<string, number>, Record<string, number>] {
   const translation: Record<string, number> = {};
   const scale: Record<string, number> = {};
@@ -92,8 +92,8 @@ function nextScaleMetadata(
     if (spatialDims.includes(dim)) {
       const factor = dimFactors[dim];
       scale[dim] = image.scale[dim] * factor;
-      translation[dim] =
-        image.translation[dim] + 0.5 * (factor - 1) * image.scale[dim];
+      translation[dim] = image.translation[dim] +
+        0.5 * (factor - 1) * image.scale[dim];
     } else {
       // Only copy non-spatial dimensions if they exist in the source
       if (dim in image.scale) {
@@ -135,7 +135,7 @@ function computeSigma(shrinkFactors: number[]): number[] {
 async function zarrToItkImage(
   array: zarr.Array<zarr.DataType, zarr.Readable>,
   dims: string[],
-  isVector = false
+  isVector = false,
 ): Promise<Image> {
   // Read the full array data
   const result = await zarr.get(array);
@@ -178,7 +178,7 @@ async function zarrToItkImage(
         result.data,
         result.shape,
         permutation,
-        getItkComponentType(result.data)
+        getItkComponentType(result.data),
       );
     } else {
       // "c" already at end or not present, just copy data
@@ -217,7 +217,7 @@ async function zarrToItkImage(
  * Copy typed array to appropriate type
  */
 function copyTypedArray(
-  data: unknown
+  data: unknown,
 ):
   | Float32Array
   | Float64Array
@@ -272,7 +272,7 @@ function transposeArray(
     | "uint64"
     | "int64"
     | "float32"
-    | "float64"
+    | "float64",
 ):
   | Float32Array
   | Float64Array
@@ -384,7 +384,7 @@ function transposeArray(
  * Get ITK component type from typed array
  */
 function getItkComponentType(
-  data: unknown
+  data: unknown,
 ):
   | "uint8"
   | "int8"
@@ -425,7 +425,7 @@ function createIdentityMatrix(dimension: number): Float64Array {
 async function itkImageToZarr(
   itkImage: Image,
   path: string,
-  chunkShape: number[]
+  chunkShape: number[],
 ): Promise<zarr.Array<zarr.DataType, zarr.Readable>> {
   // Use in-memory store
   const store: Map<string, Uint8Array> = new Map();
@@ -493,7 +493,7 @@ async function downsampleChannelFirst(
   image: NgffImage,
   dimFactors: DimFactors,
   spatialDims: string[],
-  smoothing: "gaussian" | "bin_shrink" | "label_image"
+  smoothing: "gaussian" | "bin_shrink" | "label_image",
 ): Promise<NgffImage> {
   // Get the channel index and count
   const cIndex = image.dims.indexOf("c");
@@ -598,7 +598,7 @@ async function downsampleChannelFirst(
     const downsampledArray = await itkImageToZarr(
       downsampled,
       "downsampled_channel",
-      downsampledChunkShape
+      downsampledChunkShape,
     );
     downsampledChannels.push(downsampledArray);
   }
@@ -607,14 +607,14 @@ async function downsampleChannelFirst(
   const combinedArray = await combineChannels(
     downsampledChannels,
     cIndex,
-    image.dims
+    image.dims,
   );
 
   // Compute new metadata
   const [translation, scale] = nextScaleMetadata(
     image,
     dimFactors,
-    spatialDims
+    spatialDims,
   );
 
   return new NgffImage({
@@ -634,7 +634,7 @@ async function downsampleChannelFirst(
 function extractChannel(
   result: { data: unknown; shape: number[] },
   cIndex: number,
-  channelIdx: number
+  channelIdx: number,
 ):
   | Float32Array
   | Float64Array
@@ -662,7 +662,7 @@ function extractChannel(
   // Calculate output size (all dims except channel)
   const outputSize = shape.reduce(
     (acc, s, i) => (i === cIndex ? acc : acc * s),
-    1
+    1,
   );
 
   let output:
@@ -737,7 +737,7 @@ function extractChannel(
 async function combineChannels(
   channels: zarr.Array<zarr.DataType, zarr.Readable>[],
   cIndex: number,
-  _originalDims: string[]
+  _originalDims: string[],
 ): Promise<zarr.Array<zarr.DataType, zarr.Readable>> {
   // Read all channel data
   const channelData = await Promise.all(channels.map((c) => zarr.get(c)));
@@ -844,12 +844,12 @@ async function combineChannels(
 async function downsampleGaussian(
   image: NgffImage,
   dimFactors: DimFactors,
-  spatialDims: string[]
+  spatialDims: string[],
 ): Promise<NgffImage> {
   const cIndex = image.dims.indexOf("c");
   const isVector = cIndex === image.dims.length - 1;
-  const isChannelFirst =
-    cIndex !== -1 && cIndex < image.dims.length - 1 && !isVector;
+  const isChannelFirst = cIndex !== -1 && cIndex < image.dims.length - 1 &&
+    !isVector;
 
   // If channel is first (before spatial dims), process each channel separately
   if (isChannelFirst) {
@@ -857,7 +857,7 @@ async function downsampleGaussian(
       image,
       dimFactors,
       spatialDims,
-      "gaussian"
+      "gaussian",
     );
   }
 
@@ -896,7 +896,7 @@ async function downsampleGaussian(
   const [translation, scale] = nextScaleMetadata(
     image,
     dimFactors,
-    spatialDims
+    spatialDims,
   );
 
   // Convert back to zarr array
@@ -920,12 +920,12 @@ async function downsampleGaussian(
 async function downsampleBinShrinkImpl(
   image: NgffImage,
   dimFactors: DimFactors,
-  spatialDims: string[]
+  spatialDims: string[],
 ): Promise<NgffImage> {
   const cIndex = image.dims.indexOf("c");
   const isVector = cIndex === image.dims.length - 1;
-  const isChannelFirst =
-    cIndex !== -1 && cIndex < image.dims.length - 1 && !isVector;
+  const isChannelFirst = cIndex !== -1 && cIndex < image.dims.length - 1 &&
+    !isVector;
 
   // If channel is first (before spatial dims), process each channel separately
   if (isChannelFirst) {
@@ -933,7 +933,7 @@ async function downsampleBinShrinkImpl(
       image,
       dimFactors,
       spatialDims,
-      "bin_shrink"
+      "bin_shrink",
     );
   }
 
@@ -963,7 +963,7 @@ async function downsampleBinShrinkImpl(
   const [translation, scale] = nextScaleMetadata(
     image,
     dimFactors,
-    spatialDims
+    spatialDims,
   );
 
   // Convert back to zarr array
@@ -987,12 +987,12 @@ async function downsampleBinShrinkImpl(
 async function downsampleLabelImageImpl(
   image: NgffImage,
   dimFactors: DimFactors,
-  spatialDims: string[]
+  spatialDims: string[],
 ): Promise<NgffImage> {
   const cIndex = image.dims.indexOf("c");
   const isVector = cIndex === image.dims.length - 1;
-  const isChannelFirst =
-    cIndex !== -1 && cIndex < image.dims.length - 1 && !isVector;
+  const isChannelFirst = cIndex !== -1 && cIndex < image.dims.length - 1 &&
+    !isVector;
 
   // If channel is first (before spatial dims), process each channel separately
   if (isChannelFirst) {
@@ -1000,7 +1000,7 @@ async function downsampleLabelImageImpl(
       image,
       dimFactors,
       spatialDims,
-      "label_image"
+      "label_image",
     );
   }
 
@@ -1039,7 +1039,7 @@ async function downsampleLabelImageImpl(
   const [translation, scale] = nextScaleMetadata(
     image,
     dimFactors,
-    spatialDims
+    spatialDims,
   );
 
   // Convert back to zarr array
@@ -1063,7 +1063,7 @@ async function downsampleLabelImageImpl(
 export async function downsampleItkWasm(
   ngffImage: NgffImage,
   scaleFactors: (Record<string, number> | number)[],
-  smoothing: "gaussian" | "bin_shrink" | "label_image"
+  smoothing: "gaussian" | "bin_shrink" | "label_image",
 ): Promise<NgffImage[]> {
   const multiscales: NgffImage[] = [ngffImage];
   let previousImage = ngffImage;
@@ -1080,7 +1080,7 @@ export async function downsampleItkWasm(
     previousDimFactors = updatePreviousDimFactors(
       scaleFactor,
       spatialDims,
-      previousDimFactors
+      previousDimFactors,
     );
 
     let downsampled: NgffImage;
@@ -1088,19 +1088,19 @@ export async function downsampleItkWasm(
       downsampled = await downsampleGaussian(
         previousImage,
         dimFactors,
-        spatialDims
+        spatialDims,
       );
     } else if (smoothing === "bin_shrink") {
       downsampled = await downsampleBinShrinkImpl(
         previousImage,
         dimFactors,
-        spatialDims
+        spatialDims,
       );
     } else if (smoothing === "label_image") {
       downsampled = await downsampleLabelImageImpl(
         previousImage,
         dimFactors,
-        spatialDims
+        spatialDims,
       );
     } else {
       throw new Error(`Unknown smoothing method: ${smoothing}`);
