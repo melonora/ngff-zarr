@@ -133,13 +133,6 @@ def _write_with_tensorstore(
     """Write array using tensorstore backend"""
     import tensorstore as ts
 
-    # Filter out compression-related kwargs that don't apply to TensorStore
-    # TensorStore handles compression through codecs in metadata
-    filtered_kwargs = {
-        k: v for k, v in kwargs.items()
-        if k not in ['compressor', 'compression', 'filters']
-    }
-
     # Use full array shape if provided, otherwise use the region array shape
     dataset_shape = full_array_shape if full_array_shape is not None else array.shape
 
@@ -164,7 +157,7 @@ def _write_with_tensorstore(
             # Add compression for zarr v2 with TensorStore
             if compressor is not None:
                 # TensorStore zarr2 driver uses compressor in metadata
-                if hasattr(compressor, 'codec_id'):
+                if hasattr(compressor, "codec_id"):
                     # numcodecs compressor object
                     spec["metadata"]["compressor"] = compressor.get_config()
                 else:
@@ -194,29 +187,31 @@ def _write_with_tensorstore(
                 if compressor is None:
                     return None
 
-                if hasattr(compressor, 'codec_id'):
+                if hasattr(compressor, "codec_id"):
                     # numcodecs compressor object
                     codec_id = compressor.codec_id
-                    if codec_id == 'gzip':
+                    if codec_id == "gzip":
                         return {
                             "name": "gzip",
-                            "configuration": {"level": getattr(compressor, 'level', 6)}
+                            "configuration": {"level": getattr(compressor, "level", 6)},
                         }
-                    elif codec_id == 'blosc':
+                    elif codec_id == "blosc":
                         return {
                             "name": "blosc",
                             "configuration": {
-                                "cname": getattr(compressor, 'cname', 'lz4'),
-                                "clevel": getattr(compressor, 'clevel', 5),
-                                "shuffle": "shuffle" if getattr(compressor, 'shuffle', 1) == 1 else "noshuffle"
-                            }
+                                "cname": getattr(compressor, "cname", "lz4"),
+                                "clevel": getattr(compressor, "clevel", 5),
+                                "shuffle": "shuffle"
+                                if getattr(compressor, "shuffle", 1) == 1
+                                else "noshuffle",
+                            },
                         }
-                    elif codec_id == 'zstd':
+                    elif codec_id == "zstd":
                         return {
                             "name": "zstd",
-                            "configuration": {"level": getattr(compressor, 'level', 3)}
+                            "configuration": {"level": getattr(compressor, "level", 3)},
                         }
-                    elif codec_id == 'lz4':
+                    elif codec_id == "lz4":
                         return {"name": "lz4"}
                     else:
                         # Fallback: try to use the codec_id as name
@@ -240,10 +235,12 @@ def _write_with_tensorstore(
                         # For sharding, compression goes in the inner codecs
                         sharding_config["codecs"] = [compression_codec]
 
-                codecs.append({
-                    "name": "sharding_indexed",
-                    "configuration": sharding_config,
-                })
+                codecs.append(
+                    {
+                        "name": "sharding_indexed",
+                        "configuration": sharding_config,
+                    }
+                )
             else:
                 # No sharding, add compression codec directly if specified
                 if compressor is not None:
@@ -385,7 +382,7 @@ def _prepare_metadata(
         )
     else:
         # Update the existing metadata object with the type
-        if hasattr(metadata, 'type'):
+        if hasattr(metadata, "type"):
             metadata.type = method_type
 
     dimension_names = tuple([ax.name for ax in metadata.axes])
@@ -505,8 +502,8 @@ def _write_array_with_tensorstore(
 ) -> None:
     """Write an array using the TensorStore backend."""
     # Extract compressor and other conflicting parameters from kwargs to avoid conflicts
-    compressor = kwargs.pop('compressor', None)
-    kwargs.pop('chunks', None)  # Remove chunks from kwargs since it's a positional arg
+    compressor = kwargs.pop("compressor", None)
+    kwargs.pop("chunks", None)  # Remove chunks from kwargs since it's a positional arg
 
     scale_path = f"{store_path}/{path}"
     if shards is None:
@@ -652,7 +649,52 @@ def _handle_large_array_writing(
         else:
             shrink_factors.append(1)
 
-    chunks = tuple([c[0] for c in arr.chunks])
+    # Ensure chunks are compatible with Dask's to_zarr when writing with regions.
+    # The Zarr chunk size must divide evenly into the dimension size to avoid
+    # PerformanceWarning and potential data loss during region writes.
+    def _find_optimal_chunk_size(first_chunk, dim_size, min_divisor=16):
+        """Find a chunk size that divides evenly into dim_size and is ideally divisible by min_divisor.
+
+        The returned chunk size will:
+        1. Divide evenly into dim_size (required for safe region writes)
+        2. Be as close as possible to first_chunk
+        3. Preferably be divisible by min_divisor for performance
+        """
+        # If dimension is very small, just use it directly
+        if dim_size <= min_divisor:
+            return dim_size
+
+        # Start with the target chunk size
+        target = first_chunk
+
+        # First try to find a divisor of dim_size that's divisible by min_divisor
+        # and close to our target
+        best_chunk = dim_size  # Fallback: use full dimension
+        best_distance = abs(dim_size - target)
+
+        # Check all divisors of dim_size
+        for i in range(1, int(np.sqrt(dim_size)) + 1):
+            if dim_size % i == 0:
+                # i and dim_size//i are both divisors
+                for candidate in [i, dim_size // i]:
+                    distance = abs(candidate - target)
+                    # Prefer divisors that are multiples of min_divisor
+                    is_multiple = candidate % min_divisor == 0
+
+                    # Update if closer to target, with preference for multiples of min_divisor
+                    if distance < best_distance or (
+                        distance == best_distance
+                        and is_multiple
+                        and best_chunk % min_divisor != 0
+                    ):
+                        best_chunk = candidate
+                        best_distance = distance
+
+        return best_chunk
+
+    chunks = tuple(
+        [_find_optimal_chunk_size(c[0], arr.shape[i]) for i, c in enumerate(arr.chunks)]
+    )
 
     # If sharding is enabled, configure it properly
     chunk_kwargs = {}
