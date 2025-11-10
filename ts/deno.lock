@@ -46,9 +46,11 @@
     "jsr:@ts-morph/common@0.24": "0.24.0",
     "jsr:@zarrita/storage@~0.1.1": "0.1.1",
     "jsr:@zarrita/zarrita@~0.5.2": "0.5.2",
+    "npm:@itk-wasm/downsample@^1.8.1": "1.8.1",
+    "npm:@itk-wasm/image-io@^1.6.0": "1.6.0",
     "npm:@playwright/test@^1.54.1": "1.54.1",
     "npm:@types/node@*": "22.15.15",
-    "npm:itk-wasm@^1.0.0-b.195": "1.0.0-b.195",
+    "npm:itk-wasm@^1.0.0-b.195": "1.0.0-b.196",
     "npm:microdiff@^1.4.0": "1.5.0",
     "npm:numcodecs@~0.3.2": "0.3.2",
     "npm:p-queue@^8.1.0": "8.1.0",
@@ -300,6 +302,20 @@
         "tar"
       ],
       "bin": true
+    },
+    "@itk-wasm/downsample@1.8.1": {
+      "integrity": "sha512-8j29GkeIECmMgS70DyLHnLMT81Ua5HZ28xSifhshEK2nERq6x4V8nm+CjJDpnKpNE3ZFe3cIY/MES5lr4iF/FQ==",
+      "dependencies": [
+        "itk-wasm@1.0.0-b.196"
+      ]
+    },
+    "@itk-wasm/image-io@1.6.0": {
+      "integrity": "sha512-cx+lHpTc3tmkfKMOMpuwGfQyhsYmac09NoOjeo5bOW45pp040boQiPow8Q/GQmjHUfI9c+H7SqeJCfKVS5SPRw==",
+      "dependencies": [
+        "axios",
+        "itk-wasm@1.0.0-b.195",
+        "mime-types"
+      ]
     },
     "@multiformats/blake2@2.0.2": {
       "integrity": "sha512-AOWu6Tyuk5UoT5m4faB6ntVnPB8EmuD6rn18s4cCgHNEGgsamT8GdvjP9DYjzFHQVaP/0L3CaKqWQqJlXx9ecw==",
@@ -920,6 +936,25 @@
       ],
       "bin": true
     },
+    "itk-wasm@1.0.0-b.196": {
+      "integrity": "sha512-LJoGEFQLgE2lKERTEOq9XFtMTnPUwR0TBWxTA/hI1QPqvXfVNHQGv+vzHTrRCq2GAM+vtWZuVt/XecTBBkN6Hg==",
+      "dependencies": [
+        "@emnapi/wasi-threads",
+        "@itk-wasm/dam",
+        "@thewtex/zstddec",
+        "@types/emscripten",
+        "axios",
+        "chalk",
+        "comlink",
+        "commander@11.1.0",
+        "fs-extra",
+        "glob",
+        "markdown-table",
+        "mime-types",
+        "wasm-feature-detect"
+      ],
+      "bin": true
+    },
     "js-sha3@0.9.3": {
       "integrity": "sha512-BcJPCQeLg6WjEx3FE591wVAevlli8lxsxm9/FzV4HXkV49TmBH38Yvrpce6fjbADGMKFrBMGTqrVz3qPIZ88Gg=="
     },
@@ -1329,6 +1364,8 @@
       "jsr:@std/path@^1.0.8",
       "jsr:@zarrita/storage@~0.1.1",
       "jsr:@zarrita/zarrita@~0.5.2",
+      "npm:@itk-wasm/downsample@^1.8.1",
+      "npm:@itk-wasm/image-io@^1.6.0",
       "npm:@playwright/test@^1.54.1",
       "npm:itk-wasm@^1.0.0-b.195",
       "npm:microdiff@^1.4.0",

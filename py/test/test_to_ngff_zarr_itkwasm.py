@@ -18,8 +18,12 @@ except ImportError:
 
 def test_downsample_czyx():
     data = np.random.randint(0, 256, 262144).reshape((2, 32, 64, 64)).astype(np.uint8)
+    from rich import print
+
     image = to_ngff_image(data, dims=["c", "z", "y", "x"])
+    print(image)
     multiscales = to_multiscales(image, scale_factors=[2, 4], chunks=32)
+    print(multiscales)
     store = MemoryStore()
     to_ngff_zarr(store, multiscales)
     assert multiscales.images[0].dims[0] == "c"

@@ -10,17 +10,25 @@ import * as zarr from "zarrita";
 import { Methods } from "../src/types/methods.ts";
 import { toMultiscales, toNgffImage } from "../src/io/to_multiscales.ts";
 import { fromNgffZarr, toNgffZarr } from "../src/mod.ts";
+import { NgffImage } from "../src/types/ngff_image.ts";
 import type { MemoryStore } from "../src/io/from_ngff_zarr.ts";
+
+async function createTestImage(
+  xSize: number,
+  ySize: number,
+): Promise<NgffImage> {
+  const data = new Uint8Array(xSize * ySize)
+    .fill(0)
+    .map(() => Math.floor(Math.random() * 255));
+  return await toNgffImage(data, { dims: ["y", "x"], shape: [ySize, xSize] });
+}
 
 Deno.test("multiscales metadata field is populated correctly", async () => {
   // Create a simple test image
-  const data = new Array(64 * 64)
-    .fill(0)
-    .map(() => Math.floor(Math.random() * 255));
-  const image = await toNgffImage(data, { dims: ["y", "x"] });
+  const image = await createTestImage(64, 64);
 
   // Test with ITKWASM_GAUSSIAN method
-  const multiscales = toMultiscales(image, {
+  const multiscales = await toMultiscales(image, {
     scaleFactors: [2],
     method: Methods.ITKWASM_GAUSSIAN,
   });
@@ -62,15 +70,12 @@ Deno.test("multiscales metadata field is populated correctly", async () => {
 });
 
 Deno.test("multiscales metadata is correctly serialized to zarr", async () => {
-  const data = new Array(32 * 32)
-    .fill(0)
-    .map(() => Math.floor(Math.random() * 255));
-  const image = await toNgffImage(data, { dims: ["y", "x"] });
+  const image = await createTestImage(64, 64);
 
   const store: MemoryStore = new Map();
 
   // Create and save multiscales
-  const multiscales = toMultiscales(image, {
+  const multiscales = await toMultiscales(image, {
     scaleFactors: [2],
     method: Methods.ITKWASM_GAUSSIAN,
   });
@@ -136,15 +141,12 @@ Deno.test("multiscales metadata is correctly serialized to zarr", async () => {
 Deno.test(
   "multiscales metadata round-trip: save to zarr and load back",
   async () => {
-    const data = new Array(32 * 32)
-      .fill(0)
-      .map(() => Math.floor(Math.random() * 255));
-    const image = await toNgffImage(data, { dims: ["y", "x"] });
+    const image = await createTestImage(32, 32);
 
     const store: MemoryStore = new Map();
 
     // Create and save multiscales
-    const originalMultiscales = toMultiscales(image, {
+    const originalMultiscales = await toMultiscales(image, {
       scaleFactors: [2],
       method: Methods.ITKWASM_GAUSSIAN,
     });
@@ -187,10 +189,7 @@ Deno.test(
 );
 
 Deno.test("different methods have different metadata", async () => {
-  const data = new Array(32 * 32)
-    .fill(0)
-    .map(() => Math.floor(Math.random() * 255));
-  const image = await toNgffImage(data, { dims: ["y", "x"] });
+  const image = await createTestImage(32, 32);
 
   // Test different methods that should work
   const testMethods = [
@@ -201,7 +200,10 @@ Deno.test("different methods have different metadata", async () => {
 
   const metadataResults = [];
   for (const method of testMethods) {
-    const multiscales = toMultiscales(image, { scaleFactors: [2], method });
+    const multiscales = await toMultiscales(image, {
+      scaleFactors: [2],
+      method,
+    });
     assertExists(
       multiscales.metadata.metadata,
       `metadata should exist for method ${method}`,
@@ -239,13 +241,10 @@ Deno.test("different methods have different metadata", async () => {
 });
 
 Deno.test("metadata field is populated when method is specified", async () => {
-  const data = new Array(32 * 32)
-    .fill(0)
-    .map(() => Math.floor(Math.random() * 255));
-  const image = await toNgffImage(data, { dims: ["y", "x"] });
+  const image = await createTestImage(32, 32);
 
   // Create multiscales with default method (should default to ITKWASM_GAUSSIAN)
-  const multiscales = toMultiscales(image, { scaleFactors: [2] });
+  const multiscales = await toMultiscales(image, { scaleFactors: [2] });
 
   // When method is not explicitly set, defaults to ITKWASM_GAUSSIAN
   // and metadata should be populated since default method is used
@@ -256,15 +255,10 @@ Deno.test("metadata field is populated when method is specified", async () => {
 });
 
 Deno.test("can handle metadata being undefined", async () => {
-  // This test verifies that our type system correctly handles optional metadata
-  // Since metadata is optional in the interface, undefined should be handled gracefully
-  const data = new Array(32 * 32)
-    .fill(0)
-    .map(() => Math.floor(Math.random() * 255));
-  const image = await toNgffImage(data, { dims: ["y", "x"] });
+  const image = await createTestImage(32, 32);
 
   // Create multiscales normally
-  const multiscales = toMultiscales(image, {
+  const multiscales = await toMultiscales(image, {
     scaleFactors: [2],
     method: Methods.ITKWASM_GAUSSIAN,
   });
