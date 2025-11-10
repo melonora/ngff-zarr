@@ -10,7 +10,6 @@ import {
   downsampleBinShrinkNode as downsampleBinShrink,
   downsampleLabelImageNode as downsampleLabelImage,
   downsampleNode as downsample,
-  gaussianKernelRadiusNode as gaussianKernelRadius,
 } from "@itk-wasm/downsample";
 import * as zarr from "zarrita";
 import { NgffImage } from "../types/ngff_image.ts";
@@ -381,26 +380,6 @@ function calculateStride(shape: number[]): number[] {
 }
 
 /**
- * Compute Gaussian kernel sigma values in pixel units for downsampling.
- *
- * Formula: sigma = sqrt((k^2 - 1^2)/(2*sqrt(2*ln(2)))^2)
- *
- * References:
- * - https://discourse.itk.org/t/resampling-to-isotropic-signal-processing-theory/1403/16
- * - https://doi.org/10.1007/978-3-319-24571-3_81
- * - http://discovery.ucl.ac.uk/1469251/1/scale-factor-point-5.pdf
- *
- * @param shrinkFactors - Shrink ratio along each axis
- * @returns Standard deviation of Gaussian kernel along each axis
- */
-function computeSigma(shrinkFactors: number[]): number[] {
-  const denominator = Math.pow(2 * Math.sqrt(2 * Math.log(2)), 2);
-  return shrinkFactors.map((factor) =>
-    Math.sqrt((factor * factor - 1) / denominator)
-  );
-}
-
-/**
  * Perform Gaussian downsampling using ITK-Wasm
  */
 async function downsampleGaussian(
@@ -424,20 +403,20 @@ async function downsampleGaussian(
     }
   }
 
-  // Compute kernel radius using the proper sigma formula
-  // sigma = sqrt((k^2 - 1^2)/(2*sqrt(2*ln(2)))^2)
-  const blockSize = itkImage.size.slice().reverse();
-  const sigma = computeSigma(shrinkFactors);
-  console.log("sigma", sigma);
-  const { radius } = await gaussianKernelRadius({
-    size: blockSize,
-    sigma,
-  });
+  // Use all zeros for cropRadius
+  const cropRadius = new Array(shrinkFactors.length).fill(0);
 
   // Perform downsampling
+  console.log(
+    "Performing Gaussian downsampling with shrinkFactors:",
+    shrinkFactors,
+    "and cropRadius:",
+    cropRadius,
+  );
+  console.log("ITK image size:", itkImage.size);
   const { downsampled } = await downsample(itkImage, {
     shrinkFactors,
-    cropRadius: radius as number[],
+    cropRadius: cropRadius,
   });
 
   // Compute new metadata
@@ -551,19 +530,13 @@ async function downsampleLabelImageImpl(
     }
   }
 
-  // Compute kernel radius using the proper sigma formula
-  // sigma = sqrt((k^2 - 1^2)/(2*sqrt(2*ln(2)))^2)
-  const blockSize = itkImage.size.slice().reverse();
-  const sigma = computeSigma(shrinkFactors);
-  const { radius } = await gaussianKernelRadius({
-    size: blockSize,
-    sigma,
-  });
+  // Use all zeros for cropRadius
+  const cropRadius = new Array(shrinkFactors.length).fill(0);
 
   // Perform downsampling
   const { downsampled } = await downsampleLabelImage(itkImage, {
     shrinkFactors,
-    cropRadius: radius as number[],
+    cropRadius: cropRadius,
   });
 
   // Compute new metadata
