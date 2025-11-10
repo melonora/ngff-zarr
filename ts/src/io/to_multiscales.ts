@@ -28,13 +28,18 @@ export interface ToMultiscalesOptions {
  */
 export async function toMultiscales(
   image: NgffImage,
-  options: ToMultiscalesOptions = {}
+  options: ToMultiscalesOptions = {},
 ): Promise<Multiscales> {
+  console.log("[DEBUG toMultiscales v3.0] Function called");
+
   const {
     scaleFactors = [2, 4],
     method = Methods.ITKWASM_GAUSSIAN,
     chunks: _chunks,
   } = options;
+
+  console.log("[DEBUG toMultiscales v3.0] method =", method);
+  console.log("[DEBUG toMultiscales v3.0] scaleFactors =", scaleFactors);
 
   let images: NgffImage[];
 
@@ -44,27 +49,33 @@ export async function toMultiscales(
     method === Methods.ITKWASM_BIN_SHRINK ||
     method === Methods.ITKWASM_LABEL_IMAGE
   ) {
-    // Perform actual downsampling using ITK-Wasm
-    const smoothing =
-      method === Methods.ITKWASM_GAUSSIAN
-        ? "gaussian"
-        : method === Methods.ITKWASM_BIN_SHRINK
-        ? "bin_shrink"
-        : "label_image";
+    console.log("[DEBUG toMultiscales v3.0] Entering ITKWASM branch");
 
-    console.log(
-      "@@@ About to call downsampleItkWasm with method:",
-      method,
-      "smoothing:",
-      smoothing
-    );
+    // Perform actual downsampling using ITK-Wasm
+    const smoothing = method === Methods.ITKWASM_GAUSSIAN
+      ? "gaussian"
+      : method === Methods.ITKWASM_BIN_SHRINK
+      ? "bin_shrink"
+      : "label_image";
+
+    console.log("[DEBUG toMultiscales v3.0] smoothing =", smoothing);
+    console.log("[DEBUG toMultiscales v3.0] About to call downsampleItkWasm");
+
     images = await downsampleItkWasm(
       image,
       scaleFactors as (Record<string, number> | number)[],
-      smoothing
+      smoothing,
     );
-    console.log("@@@ downsampleItkWasm returned", images.length, "images");
+
+    console.log(
+      "[DEBUG toMultiscales v3.0] downsampleItkWasm returned",
+      images.length,
+      "images",
+    );
   } else {
+    console.log(
+      "[DEBUG toMultiscales v3.0] Using fallback branch (no actual downsampling)",
+    );
     // Fallback: create only the base image (no actual downsampling)
     images = [image];
   }
@@ -75,7 +86,7 @@ export async function toMultiscales(
       return createAxis(
         dim as "x" | "y" | "z",
         "space",
-        image.axesUnits?.[dim]
+        image.axesUnits?.[dim],
       );
     } else if (dim === "c") {
       return createAxis(dim as "c", "channel");
@@ -91,7 +102,7 @@ export async function toMultiscales(
     return createDataset(
       `${index}`,
       img.dims.map((dim) => img.scale[dim]),
-      img.dims.map((dim) => img.translation[dim])
+      img.dims.map((dim) => img.translation[dim]),
     );
   });
 

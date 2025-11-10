@@ -39,7 +39,7 @@ await Deno.mkdir(OUTPUT_DIR, { recursive: true });
 async function readBaselineScaleImage(
   datasetName: string,
   baselineName: string,
-  scale: number
+  scale: number,
 ): Promise<ItkWasmImage> {
   const baselinePath = join(BASELINE_DIR, datasetName, baselineName);
 
@@ -61,7 +61,7 @@ async function writeScaleImage(
   image: ItkWasmImage,
   testName: string,
   scale: number,
-  suffix: string = "test"
+  suffix: string = "test",
 ): Promise<void> {
   const filename = `${testName}_s${scale}_${suffix}.nrrd`;
   const outputPath = join(OUTPUT_DIR, filename);
@@ -75,7 +75,7 @@ async function writeScaleImage(
 async function compareImages(
   testImage: ItkWasmImage,
   baselineImage: ItkWasmImage,
-  testName: string
+  testName: string,
 ): Promise<void> {
   const result = await compareImagesNode(testImage, {
     baselineImages: [baselineImage],
@@ -93,19 +93,19 @@ async function compareImages(
 
   if (!metrics.almostEqual) {
     console.error(
-      `❌ ${testName} failed: ${metrics.numberOfPixelsWithDifferences} pixels differ`
+      `❌ ${testName} failed: ${metrics.numberOfPixelsWithDifferences} pixels differ`,
     );
   }
 
   assertEquals(
     metrics.almostEqual,
     true,
-    `Images should match for ${testName}`
+    `Images should match for ${testName}`,
   );
   assertEquals(
     metrics.numberOfPixelsWithDifferences,
     0,
-    `No pixels should differ for ${testName}`
+    `No pixels should differ for ${testName}`,
   );
 }
 
@@ -124,9 +124,14 @@ Deno.test.only("cthead1 - ITKWASM_GAUSSIAN scale factors [2, 4]", async () => {
   console.log("Generated multiscales with ITKWASM_GAUSSIAN");
   console.log(multiscales);
 
-  // Write to zarr
+  // Write to zarr (both in-memory and to filesystem)
   const testStore = new Map();
   await toNgffZarr(testStore, multiscales);
+
+  // Also write to filesystem for inspection
+  const outputZarrPath = join(OUTPUT_DIR, "cthead1_gaussian_2_4.zarr");
+  await toNgffZarr(outputZarrPath, multiscales);
+  console.log(`  Wrote zarr to ${outputZarrPath}`);
 
   // Read back from zarr
   const readMultiscales = await fromNgffZarr(testStore);
@@ -137,7 +142,7 @@ Deno.test.only("cthead1 - ITKWASM_GAUSSIAN scale factors [2, 4]", async () => {
   const baselineImageS0 = await readBaselineScaleImage(
     "cthead1",
     "2_4/ITKWASM_GAUSSIAN.zarr",
-    0
+    0,
   );
   await writeScaleImage(baselineImageS0, "cthead1_gaussian", 0, "baseline");
   await compareImages(testImageS0, baselineImageS0, "cthead1 s0 (original)");
@@ -148,13 +153,13 @@ Deno.test.only("cthead1 - ITKWASM_GAUSSIAN scale factors [2, 4]", async () => {
   const baselineImageS1 = await readBaselineScaleImage(
     "cthead1",
     "2_4/ITKWASM_GAUSSIAN.zarr",
-    1
+    1,
   );
   await writeScaleImage(baselineImageS1, "cthead1_gaussian", 1, "baseline");
   await compareImages(
     testImageS1,
     baselineImageS1,
-    "cthead1 s1 (2x downsample)"
+    "cthead1 s1 (2x downsample)",
   );
 
   // Convert third scale (s2) to ITK image
@@ -163,13 +168,13 @@ Deno.test.only("cthead1 - ITKWASM_GAUSSIAN scale factors [2, 4]", async () => {
   const baselineImageS2 = await readBaselineScaleImage(
     "cthead1",
     "2_4/ITKWASM_GAUSSIAN.zarr",
-    2
+    2,
   );
   await writeScaleImage(baselineImageS2, "cthead1_gaussian", 2, "baseline");
   await compareImages(
     testImageS2,
     baselineImageS2,
-    "cthead1 s2 (4x downsample)"
+    "cthead1 s2 (4x downsample)",
   );
 });
 
@@ -186,9 +191,14 @@ Deno.test("cthead1 - ITKWASM_BIN_SHRINK scale factors [2, 4]", async () => {
     method: Methods.ITKWASM_BIN_SHRINK,
   });
 
-  // Write to zarr
+  // Write to zarr (both in-memory and to filesystem)
   const testStore = new Map();
   await toNgffZarr(testStore, multiscales);
+
+  // Also write to filesystem for inspection
+  const outputZarrPath = join(OUTPUT_DIR, "cthead1_bin_shrink_2_4.zarr");
+  await toNgffZarr(outputZarrPath, multiscales);
+  console.log(`  Wrote zarr to ${outputZarrPath}`);
 
   // Read back from zarr
   const readMultiscales = await fromNgffZarr(testStore);
@@ -199,7 +209,7 @@ Deno.test("cthead1 - ITKWASM_BIN_SHRINK scale factors [2, 4]", async () => {
   const baselineImageS0 = await readBaselineScaleImage(
     "cthead1",
     "2_4/ITKWASM_BIN_SHRINK.zarr",
-    0
+    0,
   );
   await writeScaleImage(baselineImageS0, "cthead1_bin_shrink", 0, "baseline");
   await compareImages(testImageS0, baselineImageS0, "cthead1 bin_shrink s0");
@@ -210,7 +220,7 @@ Deno.test("cthead1 - ITKWASM_BIN_SHRINK scale factors [2, 4]", async () => {
   const baselineImageS1 = await readBaselineScaleImage(
     "cthead1",
     "2_4/ITKWASM_BIN_SHRINK.zarr",
-    1
+    1,
   );
   await writeScaleImage(baselineImageS1, "cthead1_bin_shrink", 1, "baseline");
   await compareImages(testImageS1, baselineImageS1, "cthead1 bin_shrink s1");
@@ -231,9 +241,14 @@ Deno.test(
       method: Methods.ITKWASM_LABEL_IMAGE,
     });
 
-    // Write to zarr
+    // Write to zarr (both in-memory and to filesystem)
     const testStore = new Map();
     await toNgffZarr(testStore, multiscales);
+
+    // Also write to filesystem for inspection
+    const outputZarrPath = join(OUTPUT_DIR, "2th_cthead1_label_image_2_4.zarr");
+    await toNgffZarr(outputZarrPath, multiscales);
+    console.log(`  Wrote zarr to ${outputZarrPath}`);
 
     // Read back from zarr
     const readMultiscales = await fromNgffZarr(testStore);
@@ -244,18 +259,18 @@ Deno.test(
     const baselineImageS0 = await readBaselineScaleImage(
       "2th_cthead1",
       "2_4/ITKWASM_LABEL_IMAGE.zarr",
-      0
+      0,
     );
     await writeScaleImage(
       baselineImageS0,
       "2th_cthead1_label_image",
       0,
-      "baseline"
+      "baseline",
     );
     await compareImages(
       testImageS0,
       baselineImageS0,
-      "2th_cthead1 label_image s0"
+      "2th_cthead1 label_image s0",
     );
 
     // Convert second scale to ITK image
@@ -264,20 +279,20 @@ Deno.test(
     const baselineImageS1 = await readBaselineScaleImage(
       "2th_cthead1",
       "2_4/ITKWASM_LABEL_IMAGE.zarr",
-      1
+      1,
     );
     await writeScaleImage(
       baselineImageS1,
       "2th_cthead1_label_image",
       1,
-      "baseline"
+      "baseline",
     );
     await compareImages(
       testImageS1,
       baselineImageS1,
-      "2th_cthead1 label_image s1"
+      "2th_cthead1 label_image s1",
     );
-  }
+  },
 );
 
 Deno.test("MR-head - ITKWASM_GAUSSIAN scale factors [2, 3, 4]", async () => {
@@ -293,9 +308,14 @@ Deno.test("MR-head - ITKWASM_GAUSSIAN scale factors [2, 3, 4]", async () => {
     method: Methods.ITKWASM_GAUSSIAN,
   });
 
-  // Write to zarr
+  // Write to zarr (both in-memory and to filesystem)
   const testStore = new Map();
   await toNgffZarr(testStore, multiscales);
+
+  // Also write to filesystem for inspection
+  const outputZarrPath = join(OUTPUT_DIR, "mr_head_gaussian_2_3_4.zarr");
+  await toNgffZarr(outputZarrPath, multiscales);
+  console.log(`  Wrote zarr to ${outputZarrPath}`);
 
   // Read back from zarr
   const readMultiscales = await fromNgffZarr(testStore);
@@ -306,7 +326,7 @@ Deno.test("MR-head - ITKWASM_GAUSSIAN scale factors [2, 3, 4]", async () => {
   const baselineImageS0 = await readBaselineScaleImage(
     "MR-head",
     "2_3_4/ITKWASM_GAUSSIAN.zarr",
-    0
+    0,
   );
   await writeScaleImage(baselineImageS0, "mr_head_gaussian", 0, "baseline");
   await compareImages(testImageS0, baselineImageS0, "MR-head s0 (original)");
@@ -316,13 +336,13 @@ Deno.test("MR-head - ITKWASM_GAUSSIAN scale factors [2, 3, 4]", async () => {
   const baselineImageS1 = await readBaselineScaleImage(
     "MR-head",
     "2_3_4/ITKWASM_GAUSSIAN.zarr",
-    1
+    1,
   );
   await writeScaleImage(baselineImageS1, "mr_head_gaussian", 1, "baseline");
   await compareImages(
     testImageS1,
     baselineImageS1,
-    "MR-head s1 (2x downsample)"
+    "MR-head s1 (2x downsample)",
   );
 
   const testImageS2 = await ngffImageToItkImage(readMultiscales.images[2]);
@@ -330,13 +350,13 @@ Deno.test("MR-head - ITKWASM_GAUSSIAN scale factors [2, 3, 4]", async () => {
   const baselineImageS2 = await readBaselineScaleImage(
     "MR-head",
     "2_3_4/ITKWASM_GAUSSIAN.zarr",
-    2
+    2,
   );
   await writeScaleImage(baselineImageS2, "mr_head_gaussian", 2, "baseline");
   await compareImages(
     testImageS2,
     baselineImageS2,
-    "MR-head s2 (3x downsample)"
+    "MR-head s2 (3x downsample)",
   );
 
   const testImageS3 = await ngffImageToItkImage(readMultiscales.images[3]);
@@ -344,12 +364,12 @@ Deno.test("MR-head - ITKWASM_GAUSSIAN scale factors [2, 3, 4]", async () => {
   const baselineImageS3 = await readBaselineScaleImage(
     "MR-head",
     "2_3_4/ITKWASM_GAUSSIAN.zarr",
-    3
+    3,
   );
   await writeScaleImage(baselineImageS3, "mr_head_gaussian", 3, "baseline");
   await compareImages(
     testImageS3,
     baselineImageS3,
-    "MR-head s3 (4x downsample)"
+    "MR-head s3 (4x downsample)",
   );
 });

@@ -40,7 +40,7 @@ export interface ItkImageToNgffImageOptions {
  */
 export async function itkImageToNgffImage(
   itkImage: Image,
-  options: ItkImageToNgffImageOptions = {}
+  options: ItkImageToNgffImageOptions = {},
 ): Promise<NgffImage> {
   const { addAnatomicalOrientation = true, path = "image" } = options;
 
