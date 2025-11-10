@@ -22,6 +22,8 @@ interface DimFactors {
 
 /**
  * Convert dimension scale factors to ITK-Wasm format
+ * This computes the incremental scale factor relative to the previous scale,
+ * not the absolute scale factor from the original image.
  */
 function dimScaleFactors(
   dims: string[],
@@ -33,17 +35,25 @@ function dimScaleFactors(
   if (typeof scaleFactor === "number") {
     for (const dim of dims) {
       if (SPATIAL_DIMS.includes(dim)) {
-        dimFactors[dim] = scaleFactor;
+        // Divide by previous factor to get incremental scaling
+        dimFactors[dim] = Math.floor(
+          scaleFactor / (previousDimFactors[dim] || 1),
+        );
       } else {
         dimFactors[dim] = previousDimFactors[dim] || 1;
       }
     }
   } else {
+    for (const dim in scaleFactor) {
+      // Divide by previous factor to get incremental scaling
+      dimFactors[dim] = Math.floor(
+        scaleFactor[dim] / (previousDimFactors[dim] || 1),
+      );
+    }
+    // Add dims not in scale_factor with factor of 1
     for (const dim of dims) {
-      if (dim in scaleFactor) {
-        dimFactors[dim] = scaleFactor[dim];
-      } else {
-        dimFactors[dim] = previousDimFactors[dim] || 1;
+      if (!(dim in dimFactors)) {
+        dimFactors[dim] = 1;
       }
     }
   }
@@ -91,7 +101,9 @@ function nextScaleMetadata(
     if (spatialDims.includes(dim)) {
       const factor = dimFactors[dim];
       scale[dim] = image.scale[dim] * factor;
-      translation[dim] = image.translation[dim];
+      // Add offset to account for pixel center shift when downsampling
+      translation[dim] = image.translation[dim] +
+        0.5 * (factor - 1) * image.scale[dim];
     } else {
       scale[dim] = image.scale[dim];
       translation[dim] = image.translation[dim];
@@ -304,7 +316,6 @@ async function itkImageToZarr(
   path: string,
   chunkShape: number[],
 ): Promise<zarr.Array<zarr.DataType, zarr.Readable>> {
-  console.log(`itkImageToZarr called with path: "${path}"`);
   const root = zarr.root(store);
 
   if (!itkImage.data) {
@@ -351,8 +362,6 @@ async function itkImageToZarr(
     data_type: dataType,
     fill_value: 0,
   });
-  console.log(`Created array, array.path = "${array.path}"`);
-  console.log(`Store now has ${store.size} entries`);
 
   // Write data - preserve the actual data type, don't cast to Float32Array
   // Shape and stride should match the ITK image size order
@@ -414,6 +423,7 @@ async function downsampleGaussian(
     cropRadius,
   );
   console.log("ITK image size:", itkImage.size);
+  console.log("ITK image data length:", itkImage.data?.length);
   const { downsampled } = await downsample(itkImage, {
     shrinkFactors,
     cropRadius: cropRadius,
