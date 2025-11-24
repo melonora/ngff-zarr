@@ -309,7 +309,6 @@ write_store_to_zip(
 This is useful for:
 - **Archiving**: Convert large plates to single-file archives
 - **Sharing**: Package complete plates for easy distribution
-- **Storage optimization**: Benefit from ZIP compression
 
 The conversion preserves all plate structure, well data, and metadata. The resulting `.ozx` file can be read using `from_hcs_zarr` just like any other HCS plate.
 
