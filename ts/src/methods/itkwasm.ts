@@ -204,7 +204,15 @@ async function zarrToItkImage(
     throw new Error("Zarr array data is empty");
   }
 
-  let data: Float32Array | Uint8Array | Uint16Array | Int16Array;
+  let data:
+    | Float32Array
+    | Float64Array
+    | Uint8Array
+    | Int8Array
+    | Uint16Array
+    | Int16Array
+    | Uint32Array
+    | Int32Array;
   let shape = result.shape;
   let _finalDims = dims;
 
@@ -259,7 +267,15 @@ async function zarrToItkImage(
     spacing: spatialShape.map(() => 1),
     direction: createIdentityMatrix(spatialShape.length),
     size: itkSize,
-    data,
+    data: data as
+      | Float32Array
+      | Float64Array
+      | Uint8Array
+      | Int8Array
+      | Uint16Array
+      | Int16Array
+      | Uint32Array
+      | Int32Array,
     metadata: new Map(),
   };
 
@@ -271,15 +287,31 @@ async function zarrToItkImage(
  */
 function copyTypedArray(
   data: unknown,
-): Float32Array | Uint8Array | Uint16Array | Int16Array {
+):
+  | Float32Array
+  | Float64Array
+  | Uint8Array
+  | Int8Array
+  | Uint16Array
+  | Int16Array
+  | Uint32Array
+  | Int32Array {
   if (data instanceof Float32Array) {
     return new Float32Array(data);
+  } else if (data instanceof Float64Array) {
+    return new Float64Array(data);
   } else if (data instanceof Uint8Array) {
     return new Uint8Array(data);
+  } else if (data instanceof Int8Array) {
+    return new Int8Array(data);
   } else if (data instanceof Uint16Array) {
     return new Uint16Array(data);
   } else if (data instanceof Int16Array) {
     return new Int16Array(data);
+  } else if (data instanceof Uint32Array) {
+    return new Uint32Array(data);
+  } else if (data instanceof Int32Array) {
+    return new Int32Array(data);
   } else {
     // Convert to Float32Array as fallback
     return new Float32Array(data as ArrayLike<number>);
@@ -293,27 +325,67 @@ function transposeArray(
   data: unknown,
   shape: number[],
   permutation: number[],
-  componentType: "uint8" | "int16" | "uint16" | "float32",
-): Float32Array | Uint8Array | Uint16Array | Int16Array {
+  componentType:
+    | "uint8"
+    | "int8"
+    | "uint16"
+    | "int16"
+    | "uint32"
+    | "int32"
+    | "float32"
+    | "float64",
+):
+  | Float32Array
+  | Float64Array
+  | Uint8Array
+  | Int8Array
+  | Uint16Array
+  | Int16Array
+  | Uint32Array
+  | Int32Array {
   const typedData = data as
     | Float32Array
+    | Float64Array
     | Uint8Array
+    | Int8Array
     | Uint16Array
-    | Int16Array;
+    | Int16Array
+    | Uint32Array
+    | Int32Array;
 
   // Create output array of same type
-  let output: Float32Array | Uint8Array | Uint16Array | Int16Array;
+  let output:
+    | Float32Array
+    | Float64Array
+    | Uint8Array
+    | Int8Array
+    | Uint16Array
+    | Int16Array
+    | Uint32Array
+    | Int32Array;
   const totalSize = typedData.length;
 
   switch (componentType) {
     case "uint8":
       output = new Uint8Array(totalSize);
       break;
-    case "int16":
-      output = new Int16Array(totalSize);
+    case "int8":
+      output = new Int8Array(totalSize);
       break;
     case "uint16":
       output = new Uint16Array(totalSize);
+      break;
+    case "int16":
+      output = new Int16Array(totalSize);
+      break;
+    case "uint32":
+      output = new Uint32Array(totalSize);
+      break;
+    case "int32":
+      output = new Int32Array(totalSize);
+      break;
+    case "float64":
+      output = new Float64Array(totalSize);
       break;
     case "float32":
     default:
@@ -362,10 +434,22 @@ function transposeArray(
  */
 function getItkComponentType(
   data: unknown,
-): "uint8" | "int16" | "uint16" | "float32" {
+):
+  | "uint8"
+  | "int8"
+  | "uint16"
+  | "int16"
+  | "uint32"
+  | "int32"
+  | "float32"
+  | "float64" {
   if (data instanceof Uint8Array) return "uint8";
-  if (data instanceof Int16Array) return "int16";
+  if (data instanceof Int8Array) return "int8";
   if (data instanceof Uint16Array) return "uint16";
+  if (data instanceof Int16Array) return "int16";
+  if (data instanceof Uint32Array) return "uint32";
+  if (data instanceof Int32Array) return "int32";
+  if (data instanceof Float64Array) return "float64";
   return "float32";
 }
 
