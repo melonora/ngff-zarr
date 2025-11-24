@@ -10,7 +10,6 @@ import {
   downsampleBinShrinkNode as downsampleBinShrink,
   downsampleLabelImageNode as downsampleLabelImage,
   downsampleNode as downsample,
-  gaussianKernelRadiusNode as gaussianKernelRadius,
 } from "@itk-wasm/downsample";
 import * as zarr from "zarrita";
 import { NgffImage } from "../types/ngff_image.ts";
@@ -22,29 +21,115 @@ interface DimFactors {
 }
 
 /**
+ * Calculate the incremental factor needed to reach the target size from the previous size.
+ * This ensures exact target sizes when downsampling incrementally.
+ */
+function calculateIncrementalFactor(
+  previousSize: number,
+  targetSize: number,
+): number {
+  if (targetSize <= 0) {
+    return 1;
+  }
+
+  // Start with the theoretical factor
+  let factor = Math.floor(Math.ceil(previousSize / (targetSize + 0.5)));
+
+  // Verify this gives us the right size
+  let actualSize = Math.floor(previousSize / factor);
+  if (actualSize !== targetSize) {
+    // Adjust factor to get exact target
+    factor = Math.max(1, Math.floor(previousSize / targetSize));
+    actualSize = Math.floor(previousSize / factor);
+
+    // If still not exact, try ceil
+    if (actualSize !== targetSize) {
+      factor = Math.max(1, Math.ceil(previousSize / targetSize));
+    }
+  }
+
+  return Math.max(1, factor);
+}
+
+/**
  * Convert dimension scale factors to ITK-Wasm format
+ * This computes the incremental scale factor relative to the previous scale,
+ * not the absolute scale factor from the original image.
+ *
+ * When originalImage and previousImage are provided, calculates the exact
+ * incremental factor needed to reach the target size from the previous size.
+ * This ensures we get exact 1x, 2x, 3x, 4x sizes even with incremental downsampling.
  */
 function dimScaleFactors(
   dims: string[],
   scaleFactor: Record<string, number> | number,
   previousDimFactors: DimFactors,
+  originalImage?: NgffImage,
+  previousImage?: NgffImage,
 ): DimFactors {
   const dimFactors: DimFactors = {};
 
   if (typeof scaleFactor === "number") {
-    for (const dim of dims) {
-      if (SPATIAL_DIMS.includes(dim)) {
-        dimFactors[dim] = scaleFactor;
-      } else {
-        dimFactors[dim] = previousDimFactors[dim] || 1;
+    if (originalImage !== undefined && previousImage !== undefined) {
+      // Calculate target size: floor(original_size / scale_factor)
+      // Then calculate incremental factor from previous size to target size
+      for (const dim of dims) {
+        if (SPATIAL_DIMS.includes(dim)) {
+          const dimIndex = originalImage.dims.indexOf(dim);
+          const originalSize = originalImage.data.shape[dimIndex];
+          const targetSize = Math.floor(originalSize / scaleFactor);
+
+          const prevDimIndex = previousImage.dims.indexOf(dim);
+          const previousSize = previousImage.data.shape[prevDimIndex];
+
+          dimFactors[dim] = calculateIncrementalFactor(
+            previousSize,
+            targetSize,
+          );
+        } else {
+          dimFactors[dim] = 1;
+        }
+      }
+    } else {
+      // Fallback to old behavior when images not provided
+      for (const dim of dims) {
+        if (SPATIAL_DIMS.includes(dim)) {
+          // Divide by previous factor to get incremental scaling
+          // Use Math.floor to truncate (matching Python's int() behavior)
+          const incrementalFactor = scaleFactor /
+            (previousDimFactors[dim] || 1);
+          dimFactors[dim] = Math.max(1, Math.floor(incrementalFactor));
+        } else {
+          dimFactors[dim] = previousDimFactors[dim] || 1;
+        }
       }
     }
   } else {
+    if (originalImage !== undefined && previousImage !== undefined) {
+      for (const dim in scaleFactor) {
+        const dimIndex = originalImage.dims.indexOf(dim);
+        const originalSize = originalImage.data.shape[dimIndex];
+        const targetSize = Math.floor(originalSize / scaleFactor[dim]);
+
+        const prevDimIndex = previousImage.dims.indexOf(dim);
+        const previousSize = previousImage.data.shape[prevDimIndex];
+
+        dimFactors[dim] = calculateIncrementalFactor(previousSize, targetSize);
+      }
+    } else {
+      // Fallback to old behavior when images not provided
+      for (const dim in scaleFactor) {
+        // Divide by previous factor to get incremental scaling
+        // Use Math.floor to truncate (matching Python's int() behavior)
+        const incrementalFactor = scaleFactor[dim] /
+          (previousDimFactors[dim] || 1);
+        dimFactors[dim] = Math.max(1, Math.floor(incrementalFactor));
+      }
+    }
+    // Add dims not in scale_factor with factor of 1
     for (const dim of dims) {
-      if (dim in scaleFactor) {
-        dimFactors[dim] = scaleFactor[dim];
-      } else {
-        dimFactors[dim] = previousDimFactors[dim] || 1;
+      if (!(dim in dimFactors)) {
+        dimFactors[dim] = 1;
       }
     }
   }
@@ -60,17 +145,15 @@ function updatePreviousDimFactors(
   spatialDims: string[],
   previousDimFactors: DimFactors,
 ): DimFactors {
-  const updated: DimFactors = { ...previousDimFactors };
+  const updated = { ...previousDimFactors };
 
   if (typeof scaleFactor === "number") {
     for (const dim of spatialDims) {
       updated[dim] = scaleFactor;
     }
   } else {
-    for (const dim of spatialDims) {
-      if (dim in scaleFactor) {
-        updated[dim] = scaleFactor[dim];
-      }
+    for (const dim in scaleFactor) {
+      updated[dim] = scaleFactor[dim];
     }
   }
 
@@ -92,40 +175,16 @@ function nextScaleMetadata(
     if (spatialDims.includes(dim)) {
       const factor = dimFactors[dim];
       scale[dim] = image.scale[dim] * factor;
+      // Add offset to account for pixel center shift when downsampling
       translation[dim] = image.translation[dim] +
         0.5 * (factor - 1) * image.scale[dim];
     } else {
-      // Only copy non-spatial dimensions if they exist in the source
-      if (dim in image.scale) {
-        scale[dim] = image.scale[dim];
-      }
-      if (dim in image.translation) {
-        translation[dim] = image.translation[dim];
-      }
+      scale[dim] = image.scale[dim];
+      translation[dim] = image.translation[dim];
     }
   }
 
   return [translation, scale];
-}
-
-/**
- * Compute Gaussian kernel sigma values in pixel units for downsampling.
- *
- * Formula: sigma = sqrt((k^2 - 1^2)/(2*sqrt(2*ln(2)))^2)
- *
- * Reference:
- * - https://discourse.itk.org/t/resampling-to-isotropic-signal-processing-theory/1403/16
- * - https://doi.org/10.1007/978-3-319-24571-3_81
- * - http://discovery.ucl.ac.uk/1469251/1/scale-factor-point-5.pdf
- *
- * @param shrinkFactors - Shrink ratio along each axis
- * @returns Standard deviation of Gaussian kernel along each axis
- */
-function computeSigma(shrinkFactors: number[]): number[] {
-  const denominator = Math.pow(2 * Math.sqrt(2 * Math.log(2)), 2);
-  return shrinkFactors.map((factor) =>
-    Math.sqrt((factor * factor - 1) / denominator)
-  );
 }
 
 /**
@@ -153,9 +212,7 @@ async function zarrToItkImage(
     | Uint16Array
     | Int16Array
     | Uint32Array
-    | Int32Array
-    | BigInt64Array
-    | BigUint64Array;
+    | Int32Array;
   let shape = result.shape;
   let _finalDims = dims;
 
@@ -193,6 +250,10 @@ async function zarrToItkImage(
   const spatialShape = isVector ? shape.slice(0, -1) : shape;
   const components = isVector ? shape[shape.length - 1] : 1;
 
+  // ITK expects size in physical space order [x, y, z], but spatialShape is in array order [z, y, x]
+  // So we need to reverse it
+  const itkSize = [...spatialShape].reverse();
+
   // Create ITK-Wasm image
   const itkImage: Image = {
     imageType: {
@@ -205,8 +266,16 @@ async function zarrToItkImage(
     origin: spatialShape.map(() => 0),
     spacing: spatialShape.map(() => 1),
     direction: createIdentityMatrix(spatialShape.length),
-    size: spatialShape as number[],
-    data,
+    size: itkSize,
+    data: data as
+      | Float32Array
+      | Float64Array
+      | Uint8Array
+      | Int8Array
+      | Uint16Array
+      | Int16Array
+      | Uint32Array
+      | Int32Array,
     metadata: new Map(),
   };
 
@@ -226,9 +295,7 @@ function copyTypedArray(
   | Uint16Array
   | Int16Array
   | Uint32Array
-  | Int32Array
-  | BigInt64Array
-  | BigUint64Array {
+  | Int32Array {
   if (data instanceof Float32Array) {
     return new Float32Array(data);
   } else if (data instanceof Float64Array) {
@@ -245,10 +312,6 @@ function copyTypedArray(
     return new Uint32Array(data);
   } else if (data instanceof Int32Array) {
     return new Int32Array(data);
-  } else if (data instanceof BigInt64Array) {
-    return new BigInt64Array(data);
-  } else if (data instanceof BigUint64Array) {
-    return new BigUint64Array(data);
   } else {
     // Convert to Float32Array as fallback
     return new Float32Array(data as ArrayLike<number>);
@@ -269,8 +332,6 @@ function transposeArray(
     | "int16"
     | "uint32"
     | "int32"
-    | "uint64"
-    | "int64"
     | "float32"
     | "float64",
 ):
@@ -281,9 +342,7 @@ function transposeArray(
   | Uint16Array
   | Int16Array
   | Uint32Array
-  | Int32Array
-  | BigInt64Array
-  | BigUint64Array {
+  | Int32Array {
   const typedData = data as
     | Float32Array
     | Float64Array
@@ -292,9 +351,7 @@ function transposeArray(
     | Uint16Array
     | Int16Array
     | Uint32Array
-    | Int32Array
-    | BigInt64Array
-    | BigUint64Array;
+    | Int32Array;
 
   // Create output array of same type
   let output:
@@ -305,9 +362,7 @@ function transposeArray(
     | Uint16Array
     | Int16Array
     | Uint32Array
-    | Int32Array
-    | BigInt64Array
-    | BigUint64Array;
+    | Int32Array;
   const totalSize = typedData.length;
 
   switch (componentType) {
@@ -317,23 +372,17 @@ function transposeArray(
     case "int8":
       output = new Int8Array(totalSize);
       break;
-    case "int16":
-      output = new Int16Array(totalSize);
-      break;
     case "uint16":
       output = new Uint16Array(totalSize);
       break;
-    case "int32":
-      output = new Int32Array(totalSize);
+    case "int16":
+      output = new Int16Array(totalSize);
       break;
     case "uint32":
       output = new Uint32Array(totalSize);
       break;
-    case "int64":
-      output = new BigInt64Array(totalSize);
-      break;
-    case "uint64":
-      output = new BigUint64Array(totalSize);
+    case "int32":
+      output = new Int32Array(totalSize);
       break;
     case "float64":
       output = new Float64Array(totalSize);
@@ -392,8 +441,6 @@ function getItkComponentType(
   | "int16"
   | "uint32"
   | "int32"
-  | "uint64"
-  | "int64"
   | "float32"
   | "float64" {
   if (data instanceof Uint8Array) return "uint8";
@@ -402,8 +449,6 @@ function getItkComponentType(
   if (data instanceof Int16Array) return "int16";
   if (data instanceof Uint32Array) return "uint32";
   if (data instanceof Int32Array) return "int32";
-  if (data instanceof BigUint64Array) return "uint64";
-  if (data instanceof BigInt64Array) return "int64";
   if (data instanceof Float64Array) return "float64";
   return "float32";
 }
@@ -421,54 +466,170 @@ function createIdentityMatrix(dimension: number): Float64Array {
 
 /**
  * Convert ITK-Wasm Image back to zarr array
+ * Uses the provided store instead of creating a new one
+ *
+ * Important: ITK-Wasm stores size in physical space order [x, y, z], but data in
+ * column-major order (x contiguous). This column-major layout with size [x, y, z]
+ * is equivalent to C-order (row-major) with shape [z, y, x]. We reverse the size
+ * to get the zarr shape and use C-order strides for that reversed shape.
+ *
+ * @param itkImage - The ITK-Wasm image to convert
+ * @param store - The zarr store to write to
+ * @param path - The path within the store
+ * @param chunkShape - The chunk shape (in spatial dimension order, will be adjusted for components)
+ * @param targetDims - The target dimension order (e.g., ["c", "z", "y", "x"])
  */
 async function itkImageToZarr(
   itkImage: Image,
+  store: Map<string, Uint8Array>,
   path: string,
   chunkShape: number[],
+  targetDims?: string[],
 ): Promise<zarr.Array<zarr.DataType, zarr.Readable>> {
-  // Use in-memory store
-  const store: Map<string, Uint8Array> = new Map();
   const root = zarr.root(store);
 
-  // Determine data type
+  if (!itkImage.data) {
+    throw new Error("ITK image data is null or undefined");
+  }
+
+  // Determine data type - support all ITK TypedArray types
   let dataType: zarr.DataType;
   if (itkImage.data instanceof Uint8Array) {
     dataType = "uint8";
   } else if (itkImage.data instanceof Int8Array) {
     dataType = "int8";
-  } else if (itkImage.data instanceof Int16Array) {
-    dataType = "int16";
   } else if (itkImage.data instanceof Uint16Array) {
     dataType = "uint16";
-  } else if (itkImage.data instanceof Int32Array) {
-    dataType = "int32";
+  } else if (itkImage.data instanceof Int16Array) {
+    dataType = "int16";
   } else if (itkImage.data instanceof Uint32Array) {
     dataType = "uint32";
-  } else if (itkImage.data instanceof BigInt64Array) {
-    dataType = "int64";
-  } else if (itkImage.data instanceof BigUint64Array) {
-    dataType = "uint64";
-  } else if (itkImage.data instanceof Float64Array) {
-    dataType = "float64";
+  } else if (itkImage.data instanceof Int32Array) {
+    dataType = "int32";
   } else if (itkImage.data instanceof Float32Array) {
     dataType = "float32";
+  } else if (itkImage.data instanceof Float64Array) {
+    dataType = "float64";
   } else {
-    dataType = "float32";
+    throw new Error(`Unsupported data type: ${itkImage.data.constructor.name}`);
+  }
+
+  // ITK stores size/spacing/origin in physical space order [x, y, z],
+  // but the data buffer is in C-order (row-major) which means [z, y, x] indexing.
+  // We need to reverse the size to match the data layout, just like we do for spacing/origin.
+  const shape = [...itkImage.size].reverse();
+
+  // For vector images, the components are stored in the data but not in the size
+  // The actual data length includes components
+  const components = itkImage.imageType.components || 1;
+  const isVector = components > 1;
+
+  // Validate data length matches expected shape (including components for vector images)
+  const spatialElements = shape.reduce((a, b) => a * b, 1);
+  const expectedLength = spatialElements * components;
+  if (itkImage.data.length !== expectedLength) {
+    console.error(`[ERROR] Data length mismatch in itkImageToZarr:`);
+    console.error(`  ITK image size (physical order):`, itkImage.size);
+    console.error(`  Shape (reversed):`, shape);
+    console.error(`  Components:`, components);
+    console.error(`  Expected data length:`, expectedLength);
+    console.error(`  Actual data length:`, itkImage.data.length);
+    throw new Error(
+      `Data length (${itkImage.data.length}) doesn't match expected shape ${shape} with ${components} components (${expectedLength} elements)`,
+    );
+  }
+
+  // Determine the final shape and whether we need to transpose
+  // ITK image data has shape [...spatialDimsReversed, components] (with c at end)
+  // If targetDims is provided, we need to match that order
+  let zarrShape: number[];
+  let zarrChunkShape: number[];
+  let finalData = itkImage.data;
+
+  if (isVector && targetDims) {
+    // Find where "c" should be in targetDims
+    const cIndex = targetDims.indexOf("c");
+    if (cIndex === -1) {
+      throw new Error("Vector image but 'c' not found in targetDims");
+    }
+
+    // Current shape is [z, y, x, c] (spatial reversed + c at end)
+    // Target shape should match targetDims order
+    const currentShape = [...shape, components];
+
+    // Build target shape based on targetDims
+    zarrShape = new Array(targetDims.length);
+    const spatialDims = shape.slice(); // [z, y, x]
+    let spatialIdx = 0;
+
+    for (let i = 0; i < targetDims.length; i++) {
+      if (targetDims[i] === "c") {
+        zarrShape[i] = components;
+      } else {
+        zarrShape[i] = spatialDims[spatialIdx++];
+      }
+    }
+
+    // If c is not at the end, we need to transpose
+    if (cIndex !== targetDims.length - 1) {
+      // Build permutation: where does each target dim come from in current shape?
+      const permutation: number[] = [];
+      spatialIdx = 0;
+      for (let i = 0; i < targetDims.length; i++) {
+        if (targetDims[i] === "c") {
+          permutation.push(currentShape.length - 1); // c is at end of current
+        } else {
+          permutation.push(spatialIdx++);
+        }
+      }
+
+      // Transpose the data
+      finalData = transposeArray(
+        itkImage.data,
+        currentShape,
+        permutation,
+        getItkComponentType(itkImage.data),
+      );
+    }
+
+    // Chunk shape should match zarrShape
+    zarrChunkShape = new Array(zarrShape.length);
+    spatialIdx = 0;
+    for (let i = 0; i < targetDims.length; i++) {
+      if (targetDims[i] === "c") {
+        zarrChunkShape[i] = components;
+      } else {
+        zarrChunkShape[i] = chunkShape[spatialIdx++];
+      }
+    }
+  } else {
+    // No targetDims or not a vector - use default behavior
+    zarrShape = isVector ? [...shape, components] : shape;
+    zarrChunkShape = isVector ? [...chunkShape, components] : chunkShape;
+  }
+
+  // Chunk shape should match the dimensionality of zarrShape
+  if (zarrChunkShape.length !== zarrShape.length) {
+    throw new Error(
+      `chunkShape length (${zarrChunkShape.length}) must match shape length (${zarrShape.length})`,
+    );
   }
 
   const array = await zarr.create(root.resolve(path), {
-    shape: itkImage.size,
-    chunk_shape: chunkShape,
+    shape: zarrShape,
+    chunk_shape: zarrChunkShape,
     data_type: dataType,
     fill_value: 0,
   });
 
-  // Write data
-  await zarr.set(array, [], {
-    data: itkImage.data as Float32Array,
-    shape: itkImage.size,
-    stride: calculateStride(itkImage.size),
+  // Write data - preserve the actual data type, don't cast to Float32Array
+  // Shape and stride should match the ITK image size order
+  // Use null for each dimension to select the entire array
+  const selection = zarrShape.map(() => null);
+  await zarr.set(array, selection, {
+    data: finalData,
+    shape: zarrShape,
+    stride: calculateStride(zarrShape),
   });
 
   return array;
@@ -487,358 +648,6 @@ function calculateStride(shape: number[]): number[] {
 }
 
 /**
- * Process channel-first data by downsampling each channel separately
- */
-async function downsampleChannelFirst(
-  image: NgffImage,
-  dimFactors: DimFactors,
-  spatialDims: string[],
-  smoothing: "gaussian" | "bin_shrink" | "label_image",
-): Promise<NgffImage> {
-  // Get the channel index and count
-  const cIndex = image.dims.indexOf("c");
-  const result = await zarr.get(image.data);
-  const channelCount = result.shape[cIndex];
-
-  // Process each channel separately
-  const downsampledChannels: zarr.Array<zarr.DataType, zarr.Readable>[] = [];
-
-  for (let channelIdx = 0; channelIdx < channelCount; channelIdx++) {
-    // Extract single channel data
-    const channelSlice = extractChannel(result, cIndex, channelIdx);
-
-    // Create temporary zarr array for this channel
-    const store: Map<string, Uint8Array> = new Map();
-    const root = zarr.root(store);
-
-    const channelDims = image.dims.filter((d) => d !== "c");
-    const channelShape = result.shape.filter((_, i) => i !== cIndex);
-    const chunkShape = channelShape.map((s) => Math.min(s, 256));
-
-    const channelArray = await zarr.create(root.resolve("channel"), {
-      shape: channelShape,
-      chunk_shape: chunkShape,
-      data_type: getItkComponentType(result.data),
-      fill_value: 0,
-    });
-
-    await zarr.set(channelArray, [], {
-      data: channelSlice,
-      shape: channelShape,
-      stride: calculateStride(channelShape),
-    });
-
-    // Create NgffImage for this channel (unused but kept for potential future use)
-    // const _channelImage = new NgffImage({
-    //   data: channelArray,
-    //   dims: channelDims,
-    //   scale: Object.fromEntries(
-    //     Object.entries(image.scale).filter(([k]) => k !== "c")
-    //   ),
-    //   translation: Object.fromEntries(
-    //     Object.entries(image.translation).filter(([k]) => k !== "c")
-    //   ),
-    //   name: image.name,
-    //   axesUnits: image.axesUnits,
-    //   computedCallbacks: image.computedCallbacks,
-    // });
-
-    // Downsample this channel
-    const itkImage = await zarrToItkImage(channelArray, channelDims, false);
-
-    const shrinkFactors: number[] = [];
-    for (let i = 0; i < channelDims.length; i++) {
-      const dim = channelDims[i];
-      if (SPATIAL_DIMS.includes(dim)) {
-        shrinkFactors.push(dimFactors[dim] || 1);
-      } else {
-        shrinkFactors.push(1); // Non-spatial dimensions don't shrink
-      }
-    }
-
-    let downsampled: Image;
-
-    if (smoothing === "gaussian") {
-      const blockSize = itkImage.size.slice().reverse();
-      const sigma = computeSigma(shrinkFactors);
-      const { radius: _radius } = await gaussianKernelRadius({
-        size: blockSize,
-        sigma,
-      });
-
-      const result = await downsample(itkImage, {
-        shrinkFactors,
-        cropRadius: shrinkFactors.map(() => 0),
-      });
-      downsampled = result.downsampled;
-    } else if (smoothing === "bin_shrink") {
-      const result = await downsampleBinShrink(itkImage, {
-        shrinkFactors,
-      });
-      downsampled = result.downsampled;
-    } else if (smoothing === "label_image") {
-      const blockSize = itkImage.size.slice().reverse();
-      const sigma = computeSigma(shrinkFactors);
-      const { radius: _radius } = await gaussianKernelRadius({
-        size: blockSize,
-        sigma,
-      });
-
-      const result = await downsampleLabelImage(itkImage, {
-        shrinkFactors,
-        cropRadius: shrinkFactors.map(() => 0),
-      });
-      downsampled = result.downsampled;
-    } else {
-      throw new Error(`Unknown smoothing method: ${smoothing}`);
-    }
-
-    // Convert back to zarr array
-    const downsampledChunkShape = downsampled.size.map((s) => Math.min(s, 256));
-    const downsampledArray = await itkImageToZarr(
-      downsampled,
-      "downsampled_channel",
-      downsampledChunkShape,
-    );
-    downsampledChannels.push(downsampledArray);
-  }
-
-  // Combine all channels back together
-  const combinedArray = await combineChannels(
-    downsampledChannels,
-    cIndex,
-    image.dims,
-  );
-
-  // Compute new metadata
-  const [translation, scale] = nextScaleMetadata(
-    image,
-    dimFactors,
-    spatialDims,
-  );
-
-  return new NgffImage({
-    data: combinedArray,
-    dims: image.dims,
-    scale,
-    translation,
-    name: image.name,
-    axesUnits: image.axesUnits,
-    computedCallbacks: image.computedCallbacks,
-  });
-}
-
-/**
- * Extract a single channel from the data
- */
-function extractChannel(
-  result: { data: unknown; shape: number[] },
-  cIndex: number,
-  channelIdx: number,
-):
-  | Float32Array
-  | Float64Array
-  | Uint8Array
-  | Int8Array
-  | Uint16Array
-  | Int16Array
-  | Uint32Array
-  | Int32Array
-  | BigInt64Array
-  | BigUint64Array {
-  const typedData = result.data as
-    | Float32Array
-    | Float64Array
-    | Uint8Array
-    | Int8Array
-    | Uint16Array
-    | Int16Array
-    | Uint32Array
-    | Int32Array
-    | BigInt64Array
-    | BigUint64Array;
-  const shape = result.shape;
-
-  // Calculate output size (all dims except channel)
-  const outputSize = shape.reduce(
-    (acc, s, i) => (i === cIndex ? acc : acc * s),
-    1,
-  );
-
-  let output:
-    | Float32Array
-    | Float64Array
-    | Uint8Array
-    | Int8Array
-    | Uint16Array
-    | Int16Array
-    | Uint32Array
-    | Int32Array
-    | BigInt64Array
-    | BigUint64Array;
-  if (typedData instanceof Uint8Array) {
-    output = new Uint8Array(outputSize);
-  } else if (typedData instanceof Int8Array) {
-    output = new Int8Array(outputSize);
-  } else if (typedData instanceof Int16Array) {
-    output = new Int16Array(outputSize);
-  } else if (typedData instanceof Uint16Array) {
-    output = new Uint16Array(outputSize);
-  } else if (typedData instanceof Int32Array) {
-    output = new Int32Array(outputSize);
-  } else if (typedData instanceof Uint32Array) {
-    output = new Uint32Array(outputSize);
-  } else if (typedData instanceof BigInt64Array) {
-    output = new BigInt64Array(outputSize);
-  } else if (typedData instanceof BigUint64Array) {
-    output = new BigUint64Array(outputSize);
-  } else if (typedData instanceof Float64Array) {
-    output = new Float64Array(outputSize);
-  } else {
-    output = new Float32Array(outputSize);
-  }
-
-  // Calculate strides
-  const stride = calculateStride(shape);
-  const outputShape = shape.filter((_, i) => i !== cIndex);
-  const _outputStride = calculateStride(outputShape);
-
-  // Extract channel
-  const indices = new Array(shape.length).fill(0);
-  let outputIdx = 0;
-
-  for (let i = 0; i < outputSize; i++) {
-    // Set channel index
-    indices[cIndex] = channelIdx;
-
-    // Calculate source index
-    let sourceIdx = 0;
-    for (let j = 0; j < shape.length; j++) {
-      sourceIdx += indices[j] * stride[j];
-    }
-
-    output[outputIdx++] = typedData[sourceIdx];
-
-    // Increment indices (skip channel dimension)
-    for (let j = shape.length - 1; j >= 0; j--) {
-      if (j === cIndex) continue;
-      indices[j]++;
-      if (indices[j] < shape[j]) break;
-      indices[j] = 0;
-    }
-  }
-
-  return output;
-}
-
-/**
- * Combine multiple channel arrays back into a single multi-channel array
- */
-async function combineChannels(
-  channels: zarr.Array<zarr.DataType, zarr.Readable>[],
-  cIndex: number,
-  _originalDims: string[],
-): Promise<zarr.Array<zarr.DataType, zarr.Readable>> {
-  // Read all channel data
-  const channelData = await Promise.all(channels.map((c) => zarr.get(c)));
-
-  // Determine combined shape
-  const firstChannel = channelData[0];
-  const channelShape = firstChannel.shape;
-  const combinedShape = [...channelShape];
-  combinedShape.splice(cIndex, 0, channels.length);
-
-  // Create combined array
-  const store: Map<string, Uint8Array> = new Map();
-  const root = zarr.root(store);
-
-  const chunkShape = combinedShape.map((s) => Math.min(s, 256));
-  const dataType = getItkComponentType(firstChannel.data);
-
-  const combinedArray = await zarr.create(root.resolve("combined"), {
-    shape: combinedShape,
-    chunk_shape: chunkShape,
-    data_type: dataType,
-    fill_value: 0,
-  });
-
-  // Combine all channels
-  const totalSize = combinedShape.reduce((acc, s) => acc * s, 1);
-  let combined:
-    | Float32Array
-    | Float64Array
-    | Uint8Array
-    | Int8Array
-    | Uint16Array
-    | Int16Array
-    | Uint32Array
-    | Int32Array
-    | BigInt64Array
-    | BigUint64Array;
-
-  if (dataType === "uint8") {
-    combined = new Uint8Array(totalSize);
-  } else if (dataType === "int8") {
-    combined = new Int8Array(totalSize);
-  } else if (dataType === "int16") {
-    combined = new Int16Array(totalSize);
-  } else if (dataType === "uint16") {
-    combined = new Uint16Array(totalSize);
-  } else if (dataType === "int32") {
-    combined = new Int32Array(totalSize);
-  } else if (dataType === "uint32") {
-    combined = new Uint32Array(totalSize);
-  } else if (dataType === "int64") {
-    combined = new BigInt64Array(totalSize);
-  } else if (dataType === "uint64") {
-    combined = new BigUint64Array(totalSize);
-  } else if (dataType === "float64") {
-    combined = new Float64Array(totalSize);
-  } else {
-    combined = new Float32Array(totalSize);
-  }
-
-  const stride = calculateStride(combinedShape);
-  const _channelStride = calculateStride(channelShape);
-
-  // Copy each channel's data
-  for (let c = 0; c < channels.length; c++) {
-    const channelTypedData = channelData[c].data as typeof combined;
-    const indices = new Array(combinedShape.length).fill(0);
-
-    for (let i = 0; i < channelTypedData.length; i++) {
-      // Set channel index
-      indices[cIndex] = c;
-
-      // Calculate target index in combined array
-      let targetIdx = 0;
-      for (let j = 0; j < combinedShape.length; j++) {
-        targetIdx += indices[j] * stride[j];
-      }
-
-      combined[targetIdx] = channelTypedData[i];
-
-      // Increment indices (skip channel dimension)
-      for (let j = combinedShape.length - 1; j >= 0; j--) {
-        if (j === cIndex) continue;
-        indices[j]++;
-        if (indices[j] < combinedShape[j]) break;
-        indices[j] = 0;
-      }
-    }
-  }
-
-  // Write combined data
-  await zarr.set(combinedArray, [], {
-    data: combined as Float32Array,
-    shape: combinedShape,
-    stride,
-  });
-
-  return combinedArray;
-}
-
-/**
  * Perform Gaussian downsampling using ITK-Wasm
  */
 async function downsampleGaussian(
@@ -846,50 +655,133 @@ async function downsampleGaussian(
   dimFactors: DimFactors,
   spatialDims: string[],
 ): Promise<NgffImage> {
-  const cIndex = image.dims.indexOf("c");
-  const isVector = cIndex === image.dims.length - 1;
-  const isChannelFirst = cIndex !== -1 && cIndex < image.dims.length - 1 &&
-    !isVector;
+  // Handle time dimension by processing each time slice independently
+  if (image.dims.includes("t")) {
+    const tDimIndex = image.dims.indexOf("t");
+    const tSize = image.data.shape[tDimIndex];
+    const newDims = image.dims.filter((dim) => dim !== "t");
 
-  // If channel is first (before spatial dims), process each channel separately
-  if (isChannelFirst) {
-    return await downsampleChannelFirst(
+    // Downsample each time slice
+    const downsampledSlices: zarr.Array<zarr.DataType, zarr.Readable>[] = [];
+    for (let t = 0; t < tSize; t++) {
+      // Extract time slice
+      const selection = new Array(image.data.shape.length).fill(null);
+      selection[tDimIndex] = t;
+      const sliceData = await zarr.get(image.data, selection);
+
+      // Create temporary zarr array for this slice
+      const sliceStore = new Map<string, Uint8Array>();
+      const sliceRoot = zarr.root(sliceStore);
+      const sliceShape = image.data.shape.filter((_, i) => i !== tDimIndex);
+      const sliceChunkShape = sliceShape.map((s) => Math.min(s, 256));
+
+      const sliceArray = await zarr.create(sliceRoot.resolve("slice"), {
+        shape: sliceShape,
+        chunk_shape: sliceChunkShape,
+        data_type: image.data.dtype,
+        fill_value: 0,
+      });
+
+      const fullSelection = new Array(sliceShape.length).fill(null);
+      await zarr.set(sliceArray, fullSelection, sliceData);
+
+      // Create NgffImage for this slice (without 't' dimension)
+      const sliceImage = new NgffImage({
+        data: sliceArray,
+        dims: newDims,
+        scale: Object.fromEntries(
+          Object.entries(image.scale).filter(([dim]) => dim !== "t"),
+        ),
+        translation: Object.fromEntries(
+          Object.entries(image.translation).filter(([dim]) => dim !== "t"),
+        ),
+        name: image.name,
+        axesUnits: image.axesUnits
+          ? Object.fromEntries(
+            Object.entries(image.axesUnits).filter(([dim]) => dim !== "t"),
+          )
+          : undefined,
+        computedCallbacks: image.computedCallbacks,
+      });
+
+      // Recursively downsample this slice (without 't', so no infinite loop)
+      const downsampledSlice = await downsampleGaussian(
+        sliceImage,
+        dimFactors,
+        spatialDims,
+      );
+      downsampledSlices.push(downsampledSlice.data);
+    }
+
+    // Combine downsampled slices back into a single array with 't' dimension
+    const firstSlice = downsampledSlices[0];
+    const combinedShape = [...image.data.shape];
+    combinedShape[tDimIndex] = tSize;
+    // Update spatial dimensions based on downsampled size
+    for (let i = 0; i < image.dims.length; i++) {
+      if (i !== tDimIndex) {
+        const sliceIndex = i < tDimIndex ? i : i - 1;
+        combinedShape[i] = firstSlice.shape[sliceIndex];
+      }
+    }
+
+    // Create combined array
+    const combinedStore = new Map<string, Uint8Array>();
+    const combinedRoot = zarr.root(combinedStore);
+    const combinedArray = await zarr.create(combinedRoot.resolve("combined"), {
+      shape: combinedShape,
+      chunk_shape: combinedShape.map((s) => Math.min(s, 256)),
+      data_type: image.data.dtype,
+      fill_value: 0,
+    });
+
+    // Copy each downsampled slice into the combined array
+    for (let t = 0; t < tSize; t++) {
+      const sliceData = await zarr.get(downsampledSlices[t]);
+      const targetSelection = new Array(combinedShape.length).fill(null);
+      targetSelection[tDimIndex] = t;
+      await zarr.set(combinedArray, targetSelection, sliceData);
+    }
+
+    // Compute new metadata (time dimension unchanged, spatial dimensions downsampled)
+    const [translation, scale] = nextScaleMetadata(
       image,
       dimFactors,
       spatialDims,
-      "gaussian",
     );
+
+    return new NgffImage({
+      data: combinedArray,
+      dims: image.dims,
+      scale: { ...image.scale, ...scale },
+      translation: { ...image.translation, ...translation },
+      name: image.name,
+      axesUnits: image.axesUnits,
+      computedCallbacks: image.computedCallbacks,
+    });
   }
+
+  const isVector = image.dims.includes("c");
 
   // Convert to ITK-Wasm format
   const itkImage = await zarrToItkImage(image.data, image.dims, isVector);
 
-  // Prepare shrink factors - need to be for spatial dimensions only
-  // For vector images, the last dimension (c) is NOT a spatial dimension in the ITK image
+  // Prepare shrink factors - need to be for ALL dimensions in ITK order (reversed)
   const shrinkFactors: number[] = [];
-  const effectiveDims = isVector ? image.dims.slice(0, -1) : image.dims;
-
-  for (let i = 0; i < effectiveDims.length; i++) {
-    const dim = effectiveDims[i];
+  for (let i = image.dims.length - 1; i >= 0; i--) {
+    const dim = image.dims[i];
     if (SPATIAL_DIMS.includes(dim)) {
       shrinkFactors.push(dimFactors[dim] || 1);
-    } else {
-      shrinkFactors.push(1); // Non-spatial dimensions don't shrink
     }
   }
 
-  // Compute kernel radius - sigma should also be for ALL dimensions
-  const blockSize = itkImage.size.slice().reverse();
-  const sigma = computeSigma(shrinkFactors);
-  const { radius: _radius } = await gaussianKernelRadius({
-    size: blockSize,
-    sigma,
-  });
+  // Use all zeros for cropRadius
+  const cropRadius = new Array(shrinkFactors.length).fill(0);
 
   // Perform downsampling
   const { downsampled } = await downsample(itkImage, {
     shrinkFactors,
-    cropRadius: shrinkFactors.map(() => 0),
+    cropRadius: cropRadius,
   });
 
   // Compute new metadata
@@ -899,9 +791,18 @@ async function downsampleGaussian(
     spatialDims,
   );
 
-  // Convert back to zarr array
-  const chunkShape = downsampled.size.map((s) => Math.min(s, 256));
-  const array = await itkImageToZarr(downsampled, "downsampled", chunkShape);
+  // Convert back to zarr array in a new in-memory store
+  // Each downsampled image gets its own store - toNgffZarr will handle copying to target
+  const store = new Map<string, Uint8Array>();
+  // Chunk shape needs to be in zarr order (reversed from ITK order)
+  const chunkShape = downsampled.size.map((s) => Math.min(s, 256)).reverse();
+  const array = await itkImageToZarr(
+    downsampled,
+    store,
+    "image",
+    chunkShape,
+    image.dims,
+  );
 
   return new NgffImage({
     data: array,
@@ -922,35 +823,124 @@ async function downsampleBinShrinkImpl(
   dimFactors: DimFactors,
   spatialDims: string[],
 ): Promise<NgffImage> {
-  const cIndex = image.dims.indexOf("c");
-  const isVector = cIndex === image.dims.length - 1;
-  const isChannelFirst = cIndex !== -1 && cIndex < image.dims.length - 1 &&
-    !isVector;
+  // Handle time dimension by processing each time slice independently
+  if (image.dims.includes("t")) {
+    const tDimIndex = image.dims.indexOf("t");
+    const tSize = image.data.shape[tDimIndex];
+    const newDims = image.dims.filter((dim) => dim !== "t");
 
-  // If channel is first (before spatial dims), process each channel separately
-  if (isChannelFirst) {
-    return await downsampleChannelFirst(
+    // Downsample each time slice
+    const downsampledSlices: zarr.Array<zarr.DataType, zarr.Readable>[] = [];
+    for (let t = 0; t < tSize; t++) {
+      // Extract time slice
+      const selection = new Array(image.data.shape.length).fill(null);
+      selection[tDimIndex] = t;
+      const sliceData = await zarr.get(image.data, selection);
+
+      // Create temporary zarr array for this slice
+      const sliceStore = new Map<string, Uint8Array>();
+      const sliceRoot = zarr.root(sliceStore);
+      const sliceShape = image.data.shape.filter((_, i) => i !== tDimIndex);
+      const sliceChunkShape = sliceShape.map((s) => Math.min(s, 256));
+
+      const sliceArray = await zarr.create(sliceRoot.resolve("slice"), {
+        shape: sliceShape,
+        chunk_shape: sliceChunkShape,
+        data_type: image.data.dtype,
+        fill_value: 0,
+      });
+
+      const fullSelection = new Array(sliceShape.length).fill(null);
+      await zarr.set(sliceArray, fullSelection, sliceData);
+
+      // Create NgffImage for this slice (without 't' dimension)
+      const sliceImage = new NgffImage({
+        data: sliceArray,
+        dims: newDims,
+        scale: Object.fromEntries(
+          Object.entries(image.scale).filter(([dim]) => dim !== "t"),
+        ),
+        translation: Object.fromEntries(
+          Object.entries(image.translation).filter(([dim]) => dim !== "t"),
+        ),
+        name: image.name,
+        axesUnits: image.axesUnits
+          ? Object.fromEntries(
+            Object.entries(image.axesUnits).filter(([dim]) => dim !== "t"),
+          )
+          : undefined,
+        computedCallbacks: image.computedCallbacks,
+      });
+
+      // Recursively downsample this slice
+      const downsampledSlice = await downsampleBinShrinkImpl(
+        sliceImage,
+        dimFactors,
+        spatialDims,
+      );
+      downsampledSlices.push(downsampledSlice.data);
+    }
+
+    // Combine downsampled slices back into a single array with 't' dimension
+    const firstSlice = downsampledSlices[0];
+    const combinedShape = [...image.data.shape];
+    combinedShape[tDimIndex] = tSize;
+    // Update spatial dimensions based on downsampled size
+    for (let i = 0; i < image.dims.length; i++) {
+      if (i !== tDimIndex) {
+        const sliceIndex = i < tDimIndex ? i : i - 1;
+        combinedShape[i] = firstSlice.shape[sliceIndex];
+      }
+    }
+
+    // Create combined array
+    const combinedStore = new Map<string, Uint8Array>();
+    const combinedRoot = zarr.root(combinedStore);
+    const combinedArray = await zarr.create(combinedRoot.resolve("combined"), {
+      shape: combinedShape,
+      chunk_shape: combinedShape.map((s) => Math.min(s, 256)),
+      data_type: image.data.dtype,
+      fill_value: 0,
+    });
+
+    // Copy each downsampled slice into the combined array
+    for (let t = 0; t < tSize; t++) {
+      const sliceData = await zarr.get(downsampledSlices[t]);
+      const targetSelection = new Array(combinedShape.length).fill(null);
+      targetSelection[tDimIndex] = t;
+      await zarr.set(combinedArray, targetSelection, sliceData);
+    }
+
+    // Compute new metadata
+    const [translation, scale] = nextScaleMetadata(
       image,
       dimFactors,
       spatialDims,
-      "bin_shrink",
     );
+
+    return new NgffImage({
+      data: combinedArray,
+      dims: image.dims,
+      scale: { ...image.scale, ...scale },
+      translation: { ...image.translation, ...translation },
+      name: image.name,
+      axesUnits: image.axesUnits,
+      computedCallbacks: image.computedCallbacks,
+    });
   }
+
+  const isVector = image.dims.includes("c");
 
   // Convert to ITK-Wasm format
   const itkImage = await zarrToItkImage(image.data, image.dims, isVector);
 
-  // Prepare shrink factors - need to be for spatial dimensions only
-  // For vector images, the last dimension (c) is NOT a spatial dimension in the ITK image
+  // Prepare shrink factors - only for spatial dimensions in ITK order (reversed)
+  // ITK bin shrink does not expect shrink factors for non-spatial dimensions like 'c'
   const shrinkFactors: number[] = [];
-  const effectiveDims = isVector ? image.dims.slice(0, -1) : image.dims;
-
-  for (let i = 0; i < effectiveDims.length; i++) {
-    const dim = effectiveDims[i];
+  for (let i = image.dims.length - 1; i >= 0; i--) {
+    const dim = image.dims[i];
     if (SPATIAL_DIMS.includes(dim)) {
       shrinkFactors.push(dimFactors[dim] || 1);
-    } else {
-      shrinkFactors.push(1); // Non-spatial dimensions don't shrink
     }
   }
 
@@ -966,9 +956,18 @@ async function downsampleBinShrinkImpl(
     spatialDims,
   );
 
-  // Convert back to zarr array
-  const chunkShape = downsampled.size.map((s) => Math.min(s, 256));
-  const array = await itkImageToZarr(downsampled, "downsampled", chunkShape);
+  // Convert back to zarr array in a new in-memory store
+  // Each downsampled image gets its own store - toNgffZarr will handle copying to target
+  const store = new Map<string, Uint8Array>();
+  // Chunk shape needs to be in zarr order (reversed from ITK order)
+  const chunkShape = downsampled.size.map((s) => Math.min(s, 256)).reverse();
+  const array = await itkImageToZarr(
+    downsampled,
+    store,
+    "image",
+    chunkShape,
+    image.dims,
+  );
 
   return new NgffImage({
     data: array,
@@ -989,31 +988,121 @@ async function downsampleLabelImageImpl(
   dimFactors: DimFactors,
   spatialDims: string[],
 ): Promise<NgffImage> {
-  const cIndex = image.dims.indexOf("c");
-  const isVector = cIndex === image.dims.length - 1;
-  const isChannelFirst = cIndex !== -1 && cIndex < image.dims.length - 1 &&
-    !isVector;
+  // Handle time dimension by processing each time slice independently
+  if (image.dims.includes("t")) {
+    const tDimIndex = image.dims.indexOf("t");
+    const tSize = image.data.shape[tDimIndex];
+    const newDims = image.dims.filter((dim) => dim !== "t");
 
-  // If channel is first (before spatial dims), process each channel separately
-  if (isChannelFirst) {
-    return await downsampleChannelFirst(
+    // Downsample each time slice
+    const downsampledSlices: zarr.Array<zarr.DataType, zarr.Readable>[] = [];
+    for (let t = 0; t < tSize; t++) {
+      // Extract time slice
+      const selection = new Array(image.data.shape.length).fill(null);
+      selection[tDimIndex] = t;
+      const sliceData = await zarr.get(image.data, selection);
+
+      // Create temporary zarr array for this slice
+      const sliceStore = new Map<string, Uint8Array>();
+      const sliceRoot = zarr.root(sliceStore);
+      const sliceShape = image.data.shape.filter((_, i) => i !== tDimIndex);
+      const sliceChunkShape = sliceShape.map((s) => Math.min(s, 256));
+
+      const sliceArray = await zarr.create(sliceRoot.resolve("slice"), {
+        shape: sliceShape,
+        chunk_shape: sliceChunkShape,
+        data_type: image.data.dtype,
+        fill_value: 0,
+      });
+
+      const fullSelection = new Array(sliceShape.length).fill(null);
+      await zarr.set(sliceArray, fullSelection, sliceData);
+
+      // Create NgffImage for this slice (without 't' dimension)
+      const sliceImage = new NgffImage({
+        data: sliceArray,
+        dims: newDims,
+        scale: Object.fromEntries(
+          Object.entries(image.scale).filter(([dim]) => dim !== "t"),
+        ),
+        translation: Object.fromEntries(
+          Object.entries(image.translation).filter(([dim]) => dim !== "t"),
+        ),
+        name: image.name,
+        axesUnits: image.axesUnits
+          ? Object.fromEntries(
+            Object.entries(image.axesUnits).filter(([dim]) => dim !== "t"),
+          )
+          : undefined,
+        computedCallbacks: image.computedCallbacks,
+      });
+
+      // Recursively downsample this slice
+      const downsampledSlice = await downsampleLabelImageImpl(
+        sliceImage,
+        dimFactors,
+        spatialDims,
+      );
+      downsampledSlices.push(downsampledSlice.data);
+    }
+
+    // Combine downsampled slices back into a single array with 't' dimension
+    const firstSlice = downsampledSlices[0];
+    const combinedShape = [...image.data.shape];
+    combinedShape[tDimIndex] = tSize;
+    // Update spatial dimensions based on downsampled size
+    for (let i = 0; i < image.dims.length; i++) {
+      if (i !== tDimIndex) {
+        const sliceIndex = i < tDimIndex ? i : i - 1;
+        combinedShape[i] = firstSlice.shape[sliceIndex];
+      }
+    }
+
+    // Create combined array
+    const combinedStore = new Map<string, Uint8Array>();
+    const combinedRoot = zarr.root(combinedStore);
+    const combinedArray = await zarr.create(combinedRoot.resolve("combined"), {
+      shape: combinedShape,
+      chunk_shape: combinedShape.map((s) => Math.min(s, 256)),
+      data_type: image.data.dtype,
+      fill_value: 0,
+    });
+
+    // Copy each downsampled slice into the combined array
+    for (let t = 0; t < tSize; t++) {
+      const sliceData = await zarr.get(downsampledSlices[t]);
+      const targetSelection = new Array(combinedShape.length).fill(null);
+      targetSelection[tDimIndex] = t;
+      await zarr.set(combinedArray, targetSelection, sliceData);
+    }
+
+    // Compute new metadata
+    const [translation, scale] = nextScaleMetadata(
       image,
       dimFactors,
       spatialDims,
-      "label_image",
     );
+
+    return new NgffImage({
+      data: combinedArray,
+      dims: image.dims,
+      scale: { ...image.scale, ...scale },
+      translation: { ...image.translation, ...translation },
+      name: image.name,
+      axesUnits: image.axesUnits,
+      computedCallbacks: image.computedCallbacks,
+    });
   }
+
+  const isVector = image.dims.includes("c");
 
   // Convert to ITK-Wasm format
   const itkImage = await zarrToItkImage(image.data, image.dims, isVector);
 
-  // Prepare shrink factors - need to be for spatial dimensions only
-  // For vector images, the last dimension (c) is NOT a spatial dimension in the ITK image
+  // Prepare shrink factors - need to be for ALL dimensions in ITK order (reversed)
   const shrinkFactors: number[] = [];
-  const effectiveDims = isVector ? image.dims.slice(0, -1) : image.dims;
-
-  for (let i = 0; i < effectiveDims.length; i++) {
-    const dim = effectiveDims[i];
+  for (let i = image.dims.length - 1; i >= 0; i--) {
+    const dim = image.dims[i];
     if (SPATIAL_DIMS.includes(dim)) {
       shrinkFactors.push(dimFactors[dim] || 1);
     } else {
@@ -1021,18 +1110,13 @@ async function downsampleLabelImageImpl(
     }
   }
 
-  // Compute kernel radius
-  const blockSize = itkImage.size.slice().reverse();
-  const sigma = computeSigma(shrinkFactors);
-  const { radius: _radius } = await gaussianKernelRadius({
-    size: blockSize,
-    sigma,
-  });
+  // Use all zeros for cropRadius
+  const cropRadius = new Array(shrinkFactors.length).fill(0);
 
   // Perform downsampling
   const { downsampled } = await downsampleLabelImage(itkImage, {
     shrinkFactors,
-    cropRadius: shrinkFactors.map(() => 0),
+    cropRadius: cropRadius,
   });
 
   // Compute new metadata
@@ -1042,9 +1126,18 @@ async function downsampleLabelImageImpl(
     spatialDims,
   );
 
-  // Convert back to zarr array
-  const chunkShape = downsampled.size.map((s) => Math.min(s, 256));
-  const array = await itkImageToZarr(downsampled, "downsampled", chunkShape);
+  // Convert back to zarr array in a new in-memory store
+  // Each downsampled image gets its own store - toNgffZarr will handle copying to target
+  const store = new Map<string, Uint8Array>();
+  // Chunk shape needs to be in zarr order (reversed from ITK order)
+  const chunkShape = downsampled.size.map((s) => Math.min(s, 256)).reverse();
+  const array = await itkImageToZarr(
+    downsampled,
+    store,
+    "image",
+    chunkShape,
+    image.dims,
+  );
 
   return new NgffImage({
     data: array,
@@ -1066,40 +1159,99 @@ export async function downsampleItkWasm(
   smoothing: "gaussian" | "bin_shrink" | "label_image",
 ): Promise<NgffImage[]> {
   const multiscales: NgffImage[] = [ngffImage];
-  let previousImage = ngffImage;
   const dims = ngffImage.dims;
-  let previousDimFactors: DimFactors = {};
-  for (const dim of dims) {
-    previousDimFactors[dim] = 1;
-  }
-
   const spatialDims = dims.filter((dim) => SPATIAL_DIMS.includes(dim));
 
-  for (const scaleFactor of scaleFactors) {
-    const dimFactors = dimScaleFactors(dims, scaleFactor, previousDimFactors);
-    previousDimFactors = updatePreviousDimFactors(
-      scaleFactor,
-      spatialDims,
-      previousDimFactors,
-    );
+  // Two strategies:
+  // 1. gaussian / label_image: hybrid absolute scale factors (each element is absolute from original)
+  //    using dimScaleFactors to choose incremental vs from-original for exact sizes.
+  // 2. bin_shrink: treat provided scaleFactors sequence as incremental factors applied successively.
+  let previousImage = ngffImage;
+  let previousDimFactors: DimFactors = {};
+  for (const dim of dims) previousDimFactors[dim] = 1;
+
+  for (let i = 0; i < scaleFactors.length; i++) {
+    const scaleFactor = scaleFactors[i];
+    let sourceImage: NgffImage;
+    let sourceDimFactors: DimFactors;
+
+    if (smoothing === "bin_shrink") {
+      // Purely incremental: scaleFactor is the shrink for this step
+      sourceImage = previousImage; // always from previous
+      sourceDimFactors = {} as DimFactors;
+      if (typeof scaleFactor === "number") {
+        for (const dim of spatialDims) sourceDimFactors[dim] = scaleFactor;
+      } else {
+        for (const dim of spatialDims) {
+          sourceDimFactors[dim] = scaleFactor[dim] || 1;
+        }
+      }
+      // Non-spatial dims factor 1
+      for (const dim of dims) {
+        if (!(dim in sourceDimFactors)) sourceDimFactors[dim] = 1;
+      }
+    } else {
+      // Hybrid absolute strategy
+      const dimFactors = dimScaleFactors(
+        dims,
+        scaleFactor,
+        previousDimFactors,
+        ngffImage,
+        previousImage,
+      );
+
+      // Decide if we can be incremental
+      let canDownsampleIncrementally = true;
+      for (const dim of Object.keys(dimFactors)) {
+        const dimIndex = ngffImage.dims.indexOf(dim);
+        if (dimIndex >= 0) {
+          const originalSize = ngffImage.data.shape[dimIndex];
+          const targetSize = Math.floor(
+            originalSize /
+              (typeof scaleFactor === "number"
+                ? scaleFactor
+                : scaleFactor[dim]),
+          );
+          const prevDimIndex = previousImage.dims.indexOf(dim);
+          const previousSize = previousImage.data.shape[prevDimIndex];
+          if (Math.floor(previousSize / dimFactors[dim]) !== targetSize) {
+            canDownsampleIncrementally = false;
+            break;
+          }
+        }
+      }
+      if (canDownsampleIncrementally) {
+        sourceImage = previousImage;
+        sourceDimFactors = dimFactors;
+      } else {
+        sourceImage = ngffImage;
+        const originalDimFactors: DimFactors = {};
+        for (const dim of dims) originalDimFactors[dim] = 1;
+        sourceDimFactors = dimScaleFactors(
+          dims,
+          scaleFactor,
+          originalDimFactors,
+        );
+      }
+    }
 
     let downsampled: NgffImage;
     if (smoothing === "gaussian") {
       downsampled = await downsampleGaussian(
-        previousImage,
-        dimFactors,
+        sourceImage,
+        sourceDimFactors,
         spatialDims,
       );
     } else if (smoothing === "bin_shrink") {
       downsampled = await downsampleBinShrinkImpl(
-        previousImage,
-        dimFactors,
+        sourceImage,
+        sourceDimFactors,
         spatialDims,
       );
     } else if (smoothing === "label_image") {
       downsampled = await downsampleLabelImageImpl(
-        previousImage,
-        dimFactors,
+        sourceImage,
+        sourceDimFactors,
         spatialDims,
       );
     } else {
@@ -1107,7 +1259,27 @@ export async function downsampleItkWasm(
     }
 
     multiscales.push(downsampled);
+
+    // Update for next iteration
     previousImage = downsampled;
+    if (smoothing === "bin_shrink") {
+      // Accumulate cumulative factors (multiply) for bin_shrink to reflect total shrink so far
+      if (typeof scaleFactor === "number") {
+        for (const dim of spatialDims) {
+          previousDimFactors[dim] *= scaleFactor;
+        }
+      } else {
+        for (const dim of spatialDims) {
+          previousDimFactors[dim] *= scaleFactor[dim] || 1;
+        }
+      }
+    } else {
+      previousDimFactors = updatePreviousDimFactors(
+        scaleFactor,
+        spatialDims,
+        previousDimFactors,
+      );
+    }
   }
 
   return multiscales;

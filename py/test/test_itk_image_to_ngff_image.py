@@ -5,7 +5,7 @@ import itkwasm
 import numpy as np
 from ngff_zarr import itk_image_to_ngff_image
 
-from ._data import test_data_dir
+from ._data import test_data_dir, input_images  # noqa: F401
 
 rng = np.random.default_rng(12345)
 

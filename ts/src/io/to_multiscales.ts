@@ -81,7 +81,7 @@ export async function toMultiscales(
   // Create datasets for all images
   const datasets = images.map((img, index) => {
     return createDataset(
-      `${index}`,
+      `scale${index}`,
       img.dims.map((dim) => img.scale[dim]),
       img.dims.map((dim) => img.translation[dim]),
     );
