@@ -51,7 +51,6 @@ await build({
     exports: {
       ".": {
         types: "./esm/mod.d.ts",
-        browser: "./esm/browser-mod.js",
         import: "./esm/mod.js",
         require: "./script/mod.js",
         default: "./esm/mod.js",
@@ -76,6 +75,8 @@ await build({
       },
     },
     browser: {
+      "./esm/methods/itkwasm.js": "./esm/methods/itkwasm-browser.js",
+      "./script/methods/itkwasm.js": "./script/methods/itkwasm-browser.js",
       "./esm/methods/itkwasm-node.js": "./esm/methods/itkwasm-browser.js",
       "./script/methods/itkwasm-node.js": "./script/methods/itkwasm-browser.js",
     },
