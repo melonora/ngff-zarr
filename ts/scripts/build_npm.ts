@@ -7,7 +7,15 @@ import { build, emptyDir } from "dnt";
 await emptyDir("./npm");
 
 await build({
-  entryPoints: ["./src/mod.ts"],
+  entryPoints: [
+    "./src/mod.ts",
+    { name: "./browser", path: "./src/browser-mod.ts" },
+    {
+      name: "./methods/itkwasm-browser",
+      path: "./src/methods/itkwasm-browser.ts",
+    },
+    { name: "./methods/itkwasm-node", path: "./src/methods/itkwasm-node.ts" },
+  ],
   outDir: "./npm",
   shims: {
     deno: false, // Disable Deno shims for browser compatibility
@@ -42,10 +50,34 @@ await build({
     types: "./esm/mod.d.ts",
     exports: {
       ".": {
+        types: "./esm/mod.d.ts",
+        browser: "./esm/browser-mod.js",
         import: "./esm/mod.js",
         require: "./script/mod.js",
-        types: "./esm/mod.d.ts",
+        default: "./esm/mod.js",
       },
+      "./browser": {
+        types: "./types/browser-mod.d.ts",
+        import: "./esm/browser-mod.js",
+        require: "./script/browser-mod.js",
+        default: "./esm/browser-mod.js",
+      },
+      "./methods/itkwasm-browser": {
+        types: "./types/methods/itkwasm-browser.d.ts",
+        import: "./esm/methods/itkwasm-browser.js",
+        require: "./script/methods/itkwasm-browser.js",
+        default: "./esm/methods/itkwasm-browser.js",
+      },
+      "./methods/itkwasm-node": {
+        types: "./types/methods/itkwasm-node.d.ts",
+        import: "./esm/methods/itkwasm-node.js",
+        require: "./script/methods/itkwasm-node.js",
+        default: "./esm/methods/itkwasm-node.js",
+      },
+    },
+    browser: {
+      "./esm/methods/itkwasm-node.js": "./esm/methods/itkwasm-browser.js",
+      "./script/methods/itkwasm-node.js": "./script/methods/itkwasm-browser.js",
     },
     files: ["esm/", "script/", "types/", "README.md", "LICENSE"],
     dependencies: {
