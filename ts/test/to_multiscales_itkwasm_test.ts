@@ -7,7 +7,10 @@
 
 import { assertEquals, assertExists } from "@std/assert";
 import { Methods } from "../src/types/methods.ts";
-import { toMultiscales, toNgffImage } from "../src/io/to_multiscales.ts";
+import {
+  toMultiscales,
+  toNgffImage,
+} from "../src/process/to_multiscales-node.ts";
 import { toNgffZarr } from "../src/mod.ts";
 import type { MemoryStore } from "../src/io/from_ngff_zarr.ts";
 

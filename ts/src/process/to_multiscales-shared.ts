@@ -1,3 +1,12 @@
+// SPDX-FileCopyrightText: Copyright (c) Fideus Labs LLC
+// SPDX-License-Identifier: MIT
+
+/**
+ * Shared utilities for to_multiscales implementations
+ * This module contains types and helper functions used by both
+ * browser and Node versions of toMultiscales.
+ */
+
 import { NgffImage } from "../types/ngff_image.ts";
 import { Multiscales } from "../types/multiscales.ts";
 import { Methods } from "../types/methods.ts";
@@ -8,10 +17,6 @@ import {
   createMultiscales,
 } from "../utils/factory.ts";
 import { getMethodMetadata } from "../utils/method_metadata.ts";
-import { downsampleItkWasm } from "../methods/itkwasm.ts";
-
-// Re-export for convenience
-export { toNgffImage, type ToNgffImageOptions } from "./to_ngff_image.ts";
 
 export interface ToMultiscalesOptions {
   scaleFactors?: (Record<string, number> | number)[];
@@ -20,15 +25,27 @@ export interface ToMultiscalesOptions {
 }
 
 /**
- * Generate multiple resolution scales for an NgffImage (simplified version for testing)
+ * Downsampling function type for ITK-Wasm implementations
+ */
+export type DownsampleFunction = (
+  image: NgffImage,
+  scaleFactors: (Record<string, number> | number)[],
+  smoothing: "gaussian" | "bin_shrink" | "label_image",
+) => Promise<NgffImage[]>;
+
+/**
+ * Generate multiple resolution scales for an NgffImage
+ * This is the core implementation used by both browser and Node versions.
  *
  * @param image - Input NgffImage
  * @param options - Configuration options
+ * @param downsampleItkWasm - The platform-specific downsampling function
  * @returns Multiscales object
  */
-export async function toMultiscales(
+export async function toMultiscalesCore(
   image: NgffImage,
-  options: ToMultiscalesOptions = {},
+  options: ToMultiscalesOptions,
+  downsampleItkWasm: DownsampleFunction,
 ): Promise<Multiscales> {
   const {
     scaleFactors = [2, 4],

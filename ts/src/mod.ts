@@ -31,7 +31,7 @@ export { getMethodMetadata } from "./utils/method_metadata.ts";
 
 export * from "./io/from_ngff_zarr.ts";
 export * from "./io/to_ngff_zarr.ts";
-export * from "./io/to_multiscales.ts";
+export * from "./process/to_multiscales-node.ts";
 export type { MemoryStore } from "./io/from_ngff_zarr.ts";
 export * from "./io/itk_image_to_ngff_image.ts";
 export * from "./io/ngff_image_to_itk_image.ts";
