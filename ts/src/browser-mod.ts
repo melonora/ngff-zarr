@@ -32,5 +32,7 @@ export {
   createMultiscales,
   createNgffImage,
 } from "./utils/factory.ts";
+export { getMethodMetadata } from "./utils/method_metadata.ts";
 
-// Note: Excluding I/O modules for browser compatibility
+// Browser-compatible processing modules
+export * from "./process/to_multiscales-browser.ts";

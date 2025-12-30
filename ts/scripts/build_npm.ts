@@ -15,6 +15,14 @@ await build({
       path: "./src/methods/itkwasm-browser.ts",
     },
     { name: "./methods/itkwasm-node", path: "./src/methods/itkwasm-node.ts" },
+    {
+      name: "./process/to_multiscales-browser",
+      path: "./src/process/to_multiscales-browser.ts",
+    },
+    {
+      name: "./process/to_multiscales-node",
+      path: "./src/process/to_multiscales-node.ts",
+    },
   ],
   outDir: "./npm",
   shims: {
@@ -75,12 +83,30 @@ await build({
         require: "./script/methods/itkwasm-node.js",
         default: "./esm/methods/itkwasm-node.js",
       },
+      "./process/to_multiscales-browser": {
+        types: "./types/process/to_multiscales-browser.d.ts",
+        import: "./esm/process/to_multiscales-browser.js",
+        require: "./script/process/to_multiscales-browser.js",
+        default: "./esm/process/to_multiscales-browser.js",
+      },
+      "./process/to_multiscales-node": {
+        types: "./types/process/to_multiscales-node.d.ts",
+        import: "./esm/process/to_multiscales-node.js",
+        require: "./script/process/to_multiscales-node.js",
+        default: "./esm/process/to_multiscales-node.js",
+      },
     },
     browser: {
+      // Redirect itkwasm imports to browser versions
       "./esm/methods/itkwasm.js": "./esm/methods/itkwasm-browser.js",
       "./script/methods/itkwasm.js": "./script/methods/itkwasm-browser.js",
       "./esm/methods/itkwasm-node.js": "./esm/methods/itkwasm-browser.js",
       "./script/methods/itkwasm-node.js": "./script/methods/itkwasm-browser.js",
+      // Redirect to_multiscales imports to browser versions
+      "./esm/process/to_multiscales-node.js":
+        "./esm/process/to_multiscales-browser.js",
+      "./script/process/to_multiscales-node.js":
+        "./script/process/to_multiscales-browser.js",
     },
     files: ["esm/", "script/", "types/", "README.md", "LICENSE"],
     dependencies: {
