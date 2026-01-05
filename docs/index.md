@@ -40,6 +40,7 @@ A lean and kind
 quick_start.md
 installation.md
 python.md
+typescript.md
 cli.md
 mcp.md
 hcs.md
