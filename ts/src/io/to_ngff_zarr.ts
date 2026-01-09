@@ -57,32 +57,44 @@ export async function toNgffZarr(
     // Create root location and group with zarrita v0.5.2 API
     const root = zarr.root(_resolvedStore as MemoryStore);
 
+    // Prepare multiscales metadata
+    const multiscalesMetadata = {
+      version: _version,
+      name: multiscales.metadata.name,
+      axes: multiscales.metadata.axes,
+      datasets: multiscales.metadata.datasets,
+      ...(multiscales.metadata.coordinateTransformations && {
+        coordinateTransformations:
+          multiscales.metadata.coordinateTransformations,
+      }),
+      ...(multiscales.metadata.type && {
+        type: multiscales.metadata.type,
+      }),
+      ...(multiscales.metadata.metadata && {
+        metadata: multiscales.metadata.metadata,
+      }),
+    };
+
     // Create the root group with OME-Zarr metadata
-    const rootGroup = await zarr.create(root, {
-      attributes: {
-        multiscales: [
-          {
-            version: _version,
-            name: multiscales.metadata.name,
-            axes: multiscales.metadata.axes,
-            datasets: multiscales.metadata.datasets,
-            ...(multiscales.metadata.coordinateTransformations && {
-              coordinateTransformations:
-                multiscales.metadata.coordinateTransformations,
-            }),
-            ...(multiscales.metadata.type && {
-              type: multiscales.metadata.type,
-            }),
-            ...(multiscales.metadata.metadata && {
-              metadata: multiscales.metadata.metadata,
-            }),
-          },
-        ],
-        ...(multiscales.metadata.omero && {
-          omero: multiscales.metadata.omero,
-        }),
-      },
-    });
+    // For version 0.5, wrap metadata under "ome" property
+    // For version 0.4, place multiscales directly at root
+    const attributes: Record<string, unknown> = _version === "0.5"
+      ? {
+        ome: {
+          version: _version,
+          multiscales: [multiscalesMetadata],
+        },
+      }
+      : {
+        multiscales: [multiscalesMetadata],
+      };
+
+    // Add OMERO metadata at root level if present (both versions)
+    if (multiscales.metadata.omero) {
+      attributes.omero = multiscales.metadata.omero;
+    }
+
+    const rootGroup = await zarr.create(root, { attributes });
 
     // Write each image in the multiscales
     for (let i = 0; i < multiscales.images.length; i++) {

@@ -74,12 +74,29 @@ export async function fromNgffZarr(
     });
     const attrs = root.attrs as unknown;
 
-    if (!attrs || !(attrs as Record<string, unknown>).multiscales) {
+    // Handle both 0.4 (multiscales at root) and 0.5 (multiscales under ome) formats
+    let multiscalesArray: unknown[];
+    let detectedVersion: string | undefined;
+
+    if (attrs && typeof attrs === "object" && "ome" in attrs) {
+      // OME-Zarr 0.5 format: metadata is under the 'ome' property
+      const omeAttrs = (attrs as Record<string, unknown>).ome as Record<
+        string,
+        unknown
+      >;
+      if (!omeAttrs || !omeAttrs.multiscales) {
+        throw new Error("No multiscales metadata found in OME-Zarr 0.5 store");
+      }
+      multiscalesArray = omeAttrs.multiscales as unknown[];
+      detectedVersion = omeAttrs.version as string | undefined;
+    } else if (attrs && typeof attrs === "object" && "multiscales" in attrs) {
+      // OME-Zarr 0.4 format: metadata is at root
+      multiscalesArray = (attrs as Record<string, unknown>)
+        .multiscales as unknown[];
+    } else {
       throw new Error("No multiscales metadata found in Zarr store");
     }
 
-    const multiscalesArray = (attrs as Record<string, unknown>)
-      .multiscales as unknown[];
     if (!Array.isArray(multiscalesArray) || multiscalesArray.length === 0) {
       throw new Error("No multiscales metadata found in Zarr store");
     }
@@ -94,10 +111,11 @@ export async function fromNgffZarr(
       // Check version compatibility if specified
       if (version) {
         const metadataWithVersion = multiscalesMetadata as { version?: string };
-        if (metadataWithVersion.version !== version) {
+        const actualVersion = metadataWithVersion.version || detectedVersion;
+        if (actualVersion !== version) {
           throw new Error(
             `Expected OME-Zarr version ${version}, but found ${
-              metadataWithVersion.version || "unknown"
+              actualVersion || "unknown"
             }`,
           );
         }
