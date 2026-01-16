@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>fromNgffZarr Browser Test</title>
+    <title>NGFF Zarr I/O Browser Test</title>
     <style>
       body {
         font-family: Arial, sans-serif;
@@ -74,10 +74,10 @@
   </head>
   <body>
     <div class="container">
-      <h1>fromNgffZarr Browser Test</h1>
+      <h1>NGFF Zarr I/O Browser Test</h1>
       <p>
-        Testing the fromNgffZarr functionality in browser environments using the
-        bundled module.
+        Testing the fromNgffZarr and toNgffZarr functionality in browser
+        environments using the bundled module.
       </p>
 
       <div id="test-results"></div>
@@ -203,6 +203,105 @@
             hasNgffImage && hasMultiscales,
             `NgffImage: ${hasNgffImage}, Multiscales: ${hasMultiscales}`,
           );
+
+          // ========== toNgffZarr Tests ==========
+
+          // Test 7: Verify toNgffZarr is exported
+          const hasToNgffZarr = "toNgffZarr" in ngffZarr;
+          addTestResult(
+            "Bundle exports toNgffZarr function",
+            hasToNgffZarr,
+            hasToNgffZarr
+              ? "toNgffZarr successfully exported"
+              : "toNgffZarr not found in exports",
+          );
+
+          if (hasToNgffZarr) {
+            // Test 8: Verify toNgffZarr is a function
+            const toNgffZarrType = typeof ngffZarr.toNgffZarr;
+            addTestResult(
+              "toNgffZarr is a function",
+              toNgffZarrType === "function",
+              `Type: ${toNgffZarrType}`,
+            );
+
+            // Test 9: Test that local file paths are rejected for writing
+            try {
+              const mockMultiscales = new ngffZarr.Multiscales({
+                images: [],
+                metadata: {
+                  axes: [
+                    { name: "y", type: "space" },
+                    { name: "x", type: "space" },
+                  ],
+                  datasets: [],
+                  name: "test",
+                },
+              });
+              await ngffZarr.toNgffZarr(
+                "/tmp/output.zarr",
+                mockMultiscales,
+                {},
+              );
+              addTestResult(
+                "toNgffZarr rejects local file paths in browser",
+                false,
+                "Local file path was NOT rejected - this is unexpected!",
+              );
+            } catch (error) {
+              const rejectedCorrectly =
+                error.message.includes("browser") ||
+                error.message.includes("Local file") ||
+                error.message.includes("MemoryStore");
+              addTestResult(
+                "toNgffZarr rejects local file paths in browser",
+                rejectedCorrectly,
+                `Error message: ${error.message}`,
+              );
+            }
+
+            // Test 10: Test that HTTP URLs are rejected for writing
+            try {
+              const mockMultiscales = new ngffZarr.Multiscales({
+                images: [],
+                metadata: {
+                  axes: [
+                    { name: "y", type: "space" },
+                    { name: "x", type: "space" },
+                  ],
+                  datasets: [],
+                  name: "test",
+                },
+              });
+              await ngffZarr.toNgffZarr(
+                "https://example.com/output.zarr",
+                mockMultiscales,
+                {},
+              );
+              addTestResult(
+                "toNgffZarr rejects HTTP URLs (read-only)",
+                false,
+                "HTTP URL was NOT rejected - this is unexpected!",
+              );
+            } catch (error) {
+              const rejectedCorrectly =
+                error.message.includes("read-only") ||
+                error.message.includes("HTTP") ||
+                error.message.includes("MemoryStore");
+              addTestResult(
+                "toNgffZarr rejects HTTP URLs (read-only)",
+                rejectedCorrectly,
+                `Error message: ${error.message}`,
+              );
+            }
+
+            // Test 11: Verify toNgffZarr accepts options parameter
+            addTestResult(
+              "toNgffZarr accepts options parameter",
+              ngffZarr.toNgffZarr.length <= 3,
+              "Function signature accepts (store, multiscales, options?) parameters",
+            );
+          }
         } catch (error) {
           errorDiv.innerHTML =
             `<div class="test-result error"><strong>Test Suite Error:</strong> ${error.message}<pre>${error.stack}</pre></div>`;

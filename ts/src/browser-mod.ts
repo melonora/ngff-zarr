@@ -1,12 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) Fideus Labs LLC
 // SPDX-License-Identifier: MIT
 // Browser-compatible module exports
-// This module includes fromNgffZarr (browser version) but excludes to_ngff_zarr
-// because the writing functionality depends on Node.js/Deno-specific filesystem APIs
-// that are not available in browser environments.
+// This module includes browser versions of fromNgffZarr and toNgffZarr.
 //
-// The browser version of fromNgffZarr supports HTTP/HTTPS URLs and MemoryStore,
-// but not local file paths.
+// The browser versions support MemoryStore (Map) and HTTP/HTTPS URLs (read-only),
+// but not local file paths (which require Node.js/Deno filesystem APIs).
 export * from "./types/units.ts";
 export * from "./types/methods.ts";
 export * from "./types/array_interface.ts";
@@ -35,13 +33,17 @@ export {
 export { getMethodMetadata } from "./utils/method_metadata.ts";
 
 // Browser-compatible I/O modules
-// Note: Uses browser-specific version that doesn't import @zarrita/storage
+// Note: Uses browser-specific versions that don't import @zarrita/storage
 // (which contains Node.js-specific modules like node:fs, node:buffer, node:path)
 export {
   fromNgffZarr,
   type FromNgffZarrOptions,
   type MemoryStore,
 } from "./io/from_ngff_zarr-browser.ts";
+export {
+  toNgffZarr,
+  type ToNgffZarrOptions,
+} from "./io/to_ngff_zarr-browser.ts";
 
 // Browser-compatible processing modules
 export * from "./process/to_multiscales-browser.ts";
