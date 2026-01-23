@@ -1,4 +1,4 @@
-name: Python old Dask
+name: Python Dask pre-sharding
 on: [push, pull_request]
 
 jobs:

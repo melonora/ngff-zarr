@@ -5,7 +5,6 @@ import tempfile
 from dataclasses import asdict
 from pathlib import Path, PurePosixPath
 from typing import Optional, Union, Tuple, Dict, List
-from packaging import version
 import warnings
 
 from .methods._metadata import get_method_metadata
@@ -16,7 +15,7 @@ else:
     import importlib.metadata as importlib_metadata
 
 import dask.array
-import dask
+from dask import __version__ as dask_version
 import numpy as np
 from itkwasm import array_like_to_numpy_array
 
@@ -39,8 +38,9 @@ from .rich_dask_progress import NgffProgress, NgffProgressCallback
 from .to_multiscales import to_multiscales
 from packaging.version import Version
 
-zarr_version = version.parse(zarr.__version__)
-zarr_version_major = zarr_version.major
+zarr_version = Version(zarr.__version__)
+IS_ZARR_V3_PLUS = zarr_version.major >= 3
+DASK_SUPPORTS_SHARDING = Version(dask_version) >= Version("2025.12.0")
 
 
 def _pop_metadata_optionals(metadata_dict, enabled_rfcs: Optional[List[int]] = None):
@@ -146,7 +146,7 @@ def _write_with_tensorstore(
     }
 
     if zarr_format == 2:
-        spec["driver"] = "zarr" if zarr_version_major < 3 else "zarr2"
+        spec["driver"] = "zarr" if not IS_ZARR_V3_PLUS else "zarr2"
         spec["metadata"]["dimension_separator"] = "/"
         spec["metadata"]["dtype"] = array.dtype.str
         # Only add chunk info when creating the dataset
@@ -338,7 +338,7 @@ def _validate_ngff_parameters(
             raise ValueError(
                 "Sharding is only supported for OME-Zarr version 0.5 and later"
             )
-        if not use_tensorstore and zarr_version_major < 3:
+        if not use_tensorstore and not IS_ZARR_V3_PLUS:
             raise ValueError(
                 "Sharding requires zarr-python version >= 3.0.0b1 for OME-Zarr version >= 0.5"
             )
@@ -381,11 +381,7 @@ def _create_zarr_root(
 ) -> zarr.Group:
     """Create and configure the root Zarr group with proper attributes."""
     zarr_format = 2 if version == "0.4" else 3
-    format_kwargs = {"zarr_format": zarr_format} if zarr_version_major >= 3 else {}
-    _zarr_kwargs = zarr_kwargs.copy()
-
-    if zarr_format == 2 and zarr_version_major >= 3:
-        _zarr_kwargs["chunk_key_encoding"] = {"name": "v2", "separator": "/"}
+    format_kwargs = {"zarr_format": zarr_format} if IS_ZARR_V3_PLUS else {}
 
     if version == "0.4":
         root = zarr.open_group(
@@ -395,7 +391,7 @@ def _create_zarr_root(
             **format_kwargs,
         )
     else:
-        if zarr_version_major < 3:
+        if not IS_ZARR_V3_PLUS:
             raise ValueError(
                 "zarr-python version >= 3.0.0b2 required for OME-Zarr version >= 0.5"
             )
@@ -448,7 +444,7 @@ def _configure_sharding(
 
     # Configure sharding parameters differently for v2 vs v3
     sharding_kwargs = {}
-    if zarr_version_major >= 3:
+    if IS_ZARR_V3_PLUS:
         # For Zarr v3, configure sharding as a codec
         # Use chunk_shape for internal chunks and configure sharding via codecs
         sharding_kwargs["chunk_shape"] = internal_chunk_shape
@@ -514,20 +510,20 @@ def _write_array_with_tensorstore(
         )
 
 
-def _prepare_zarr_kwargs(
-    to_zarr_kwargs: Dict, major_version_zarr: int, version_dask: str
-):
+def _prepare_zarr_kwargs(to_zarr_kwargs: Dict):
     """Prepare zarr kwargs for dask.array.to_zarr.
 
     This helper function ensures that correct kwargs are passed on based on which version of zarr
-    and dask is being used. The different versions support different sets of arguments.
+    and dask is being used. The different versions support different sets of arguments. The zarr_kwargs
+    are adjusted in place and thus the original is overwritten. This is not a problem given that the
+    arguments being adjusted are the same for the zarr store in use.
     """
-    is_zarr_v2 = to_zarr_kwargs.get("zarr_format") == 2
-    is_zarr_v3_plus = zarr_version_major >= 3
-    dask_shard_supported = Version(version_dask) >= Version("2025.12.0")
+    is_zarr_f2 = to_zarr_kwargs.get("zarr_format") == 2
 
-    if is_zarr_v3_plus and is_zarr_v2:
-        if dask_shard_supported:
+    # The zarr v2 case does not have to be checked here as this is done in `_zarr_kwargs.py`.
+    # The reason for not doing it here is that it only has one option whereas zarr v3 depends on zarr format being used.
+    if IS_ZARR_V3_PLUS and is_zarr_f2:
+        if DASK_SUPPORTS_SHARDING:
             # New dask uses chunk_key_encoding
             to_zarr_kwargs["chunk_key_encoding"] = {"name": "v2", "separator": "/"}
             to_zarr_kwargs.pop("dimension_separator", None)
@@ -537,10 +533,8 @@ def _prepare_zarr_kwargs(
             to_zarr_kwargs.pop("chunk_key_encoding", None)
 
     # New dask doesn't accept zarr_format in zarr_array_kwargs
-    if dask_shard_supported:
+    if DASK_SUPPORTS_SHARDING:
         to_zarr_kwargs.pop("zarr_format", None)
-
-    return to_zarr_kwargs
 
 
 def _write_array_direct(
@@ -610,15 +604,13 @@ def _write_array_direct(
         else:
             array[:] = arr.compute()
     else:
-        to_zarr_kwargs = _prepare_zarr_kwargs(
-            to_zarr_kwargs, zarr_version_major, dask.__version__
-        )
+        _prepare_zarr_kwargs(to_zarr_kwargs)
 
         target = (
             zarr_array if (region is not None and zarr_array is not None) else store
         )
         # TODO update this when dask 2026.2.0 comes out which would allow old **kwargs
-        if Version(dask.__version__) >= Version("2025.12.0"):
+        if DASK_SUPPORTS_SHARDING:
             dask.array.to_zarr(
                 arr,
                 target,
@@ -821,7 +813,7 @@ def _handle_large_array_writing(
         sharding_kwargs_clean = {}
 
     if format_kwargs["zarr_format"] == 2:
-        if zarr_version_major >= 3:
+        if IS_ZARR_V3_PLUS:
             zarr_kwargs["dimension_separator"] = zarr_kwargs["chunk_key_encoding"][
                 "separator"
             ]
@@ -1399,12 +1391,13 @@ def _to_ngff_zarr_impl(
         image.computed_callbacks = []
 
     # Consolidate metadata
-    if zarr_version_major >= 3:
+    if IS_ZARR_V3_PLUS:
         with warnings.catch_warnings():
             # Ignore consolidated metadata warning
             warnings.filterwarnings("ignore", category=UserWarning)
             zarr.consolidate_metadata(store, **format_kwargs)
     else:
+        # Zarr_format is used elsewhere but for this consolidate_metadata it is not an argument in zarr v2.
         if format_kwargs.get("zarr_format"):
             del format_kwargs["zarr_format"]
         zarr.consolidate_metadata(store, **format_kwargs)
